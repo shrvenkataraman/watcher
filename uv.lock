@@ -714,7 +714,7 @@ wheels = [
 [[package]]
 name = "watcher"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 
 [package.dev-dependencies]
 dev = [
@@ -729,9 +729,9 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "diff-cover" },
-    { name = "hypothesis" },
-    { name = "mutmut" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
+    { name = "diff-cover", specifier = ">=9" },
+    { name = "hypothesis", specifier = ">=6" },
+    { name = "mutmut", specifier = ">=3" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-cov", specifier = ">=5" },
 ]
