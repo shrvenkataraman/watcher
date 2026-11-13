@@ -1,8 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "watcher"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.scripts]
+watcher = "watcher.cli:main"
+
 [dependency-groups]
-dev = ["pytest", "hypothesis", "pytest-cov", "diff-cover", "mutmut"]
+dev = ["pytest>=8", "hypothesis>=6", "pytest-cov>=5", "diff-cover>=9", "mutmut>=3"]
+
+[tool.mutmut]
+paths_to_mutate = ["watcher/"]
+tests_dir = ["tests/"]
