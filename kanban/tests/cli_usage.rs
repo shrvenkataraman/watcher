@@ -24,3 +24,9 @@ fn ac2_both_flags_exit_2() {
     assert!(err.contains("not both"), "{err}");
     assert!(out.is_empty());
 }
+
+// AC3
+#[test]
+fn ac3_binary_is_built() {
+    assert!(std::path::Path::new(env!("CARGO_BIN_EXE_watcher-kanban")).exists());
+}
