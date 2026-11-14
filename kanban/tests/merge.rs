@@ -15,6 +15,8 @@ fn board(prd: &str, phase: &str, needs: usize, lanes: Vec<Lane>) -> Board {
     Board { prd: prd.into(), phase: phase.into(), model: String::new(), needs_you: needs, lanes }
 }
 
+// AC1
+
 #[test]
 fn ac1_lane_repos_and_prds() {
     let a = board("p1", "", 0, vec![lane("r1", vec![])]);
@@ -26,11 +28,15 @@ fn ac1_lane_repos_and_prds() {
     assert_eq!(m.prd, "all");
 }
 
+// AC2
+
 #[test]
 fn ac2_needs_you_sums() {
     let (m, _) = merge(vec![board("a", "", 2, vec![]), board("b", "", 3, vec![])]);
     assert_eq!(m.needs_you, 5);
 }
+
+// AC3
 
 #[test]
 fn ac3_phase_joined_sorted_distinct() {
@@ -40,11 +46,15 @@ fn ac3_phase_joined_sorted_distinct() {
     assert_eq!(m.phase, "pr");
 }
 
+// AC4
+
 #[test]
 fn ac4_empty_input() {
     let (m, prds) = merge(vec![]);
     assert_eq!((m.prd.as_str(), m.lanes.len(), prds.len()), ("all", 0, 0));
 }
+
+// AC5
 
 #[test]
 fn ac5_columns_preserved() {
@@ -56,6 +66,7 @@ fn ac5_columns_preserved() {
 }
 
 proptest! {
+    // AC1
     #[test]
     fn ac1_property_lengths_match(counts in proptest::collection::vec(0usize..4, 0..5)) {
         let boards: Vec<Board> = counts.iter().enumerate().map(|(i, n)| {
