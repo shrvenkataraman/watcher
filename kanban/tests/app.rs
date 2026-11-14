@@ -4,7 +4,7 @@ use kanban::ui::View;
 use proptest::prelude::*;
 
 fn t(key: &str, status: &str) -> Ticket {
-    Ticket { key: key.into(), status: status.into(), sha: String::new() }
+    Ticket { key: key.into(), status: status.into(), sha: String::new(), title: String::new() }
 }
 
 fn lane(repo: &str, cols: [Vec<Ticket>; 6]) -> Lane {

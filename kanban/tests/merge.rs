@@ -2,7 +2,7 @@ use kanban::model::{merge, Board, Lane, Ticket};
 use proptest::prelude::*;
 
 fn t(key: &str) -> Ticket {
-    Ticket { key: key.into(), status: "pending".into(), sha: String::new() }
+    Ticket { key: key.into(), status: "pending".into(), sha: String::new(), title: String::new() }
 }
 
 fn lane(repo: &str, tickets: Vec<Ticket>) -> Lane {
@@ -23,7 +23,7 @@ fn ac1_lane_repos_and_prds() {
     let b = board("p2", "", 0, vec![lane("r2", vec![]), lane("r3", vec![])]);
     let (m, prds) = merge(vec![a, b]);
     let repos: Vec<_> = m.lanes.iter().map(|l| l.repo.as_str()).collect();
-    assert_eq!(repos, ["p1/r1", "p2/r2", "p2/r3"]);
+    assert_eq!(repos, ["r1/p1", "r2/p2", "r3/p2"]);
     assert_eq!(prds, ["p1", "p2", "p2"]);
     assert_eq!(m.prd, "all");
 }

@@ -32,7 +32,7 @@ fn find(buf: &Buffer, needle: &str) -> Option<(u16, u16)> {
 }
 
 fn ticket(key: &str, status: &str, sha: &str) -> Ticket {
-    Ticket { key: key.into(), status: status.into(), sha: sha.into() }
+    Ticket { key: key.into(), status: status.into(), sha: sha.into(), title: String::new() }
 }
 
 fn board_of(prd: &str, tickets: &[Ticket]) -> Board {
