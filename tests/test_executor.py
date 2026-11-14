@@ -44,11 +44,14 @@ def ctx(tmp_path, monkeypatch):
     plan = Plan(state=st, base="develop", batch_size=5, specs={}, ticket_files={})
     c = Ctx(plan=plan, root=str(root), prompt_dir=str(prompt_dir),
             check={"quark-kit": "uv run pytest -q"})
+    import watcher.executor as exmod
+    monkeypatch.setattr(exmod, "LOAD_RETRY_WAIT", 0)
     # defaults: everything succeeds, no work done
     _patch(monkeypatch, "watcher.llm", "ensure_model", lambda *a, **k: True)
     _patch(monkeypatch, "watcher.omp", "run_omp", lambda *a, **k: OmpResult("done", ""))
     _patch(monkeypatch, "watcher.hk", "verify",
            lambda *a, **k: __import__("watcher.hk", fromlist=["VerifyResult"]).VerifyResult(True, ""))
+    _patch(monkeypatch, "watcher.hk", "review", lambda *a, **k: hkmod.ReviewResult(True, ""))
     return c
 
 
@@ -166,3 +169,78 @@ def test_AC4_pr_review_reports_objection_with_findings(ctx):
     ev = execute(Action("pr_review", "quark-kit", model="m"), ctx)
     assert ev.kind == "pr_reviewed" and ev.ok is False, ev.detail
     assert "F1" in (ev.detail or "")
+
+
+def test_noop_worker_reports_failure_without_verify_or_commit(ctx, monkeypatch):
+    _patch(monkeypatch, "watcher.hk", "verify",
+           lambda *a, **k: (_ for _ in ()).throw(AssertionError("no verify on noop")))
+    ev = execute(Action("implement", "quark-kit/01", model="m"), ctx)
+    assert ev.kind == "implemented" and ev.ok is False and "noop" in ev.detail
+    assert _commits(ctx) == 1
+
+
+def test_omp_error_reports_failure_without_commit(ctx, monkeypatch):
+    _dirty(ctx)
+    _patch(monkeypatch, "watcher.omp", "run_omp", lambda *a, **k: OmpResult("error", "Unknown tool"))
+    ev = execute(Action("fix", "quark-kit/01", model="m", detail="[]"), ctx)
+    assert ev.kind == "fixed" and ev.ok is False and "Unknown tool" in ev.detail
+    assert _commits(ctx) == 1
+
+
+def test_hk_review_rejection_blocks_commit(ctx, monkeypatch):
+    _dirty(ctx)
+    _patch(monkeypatch, "watcher.hk", "review", lambda *a, **k: hkmod.ReviewResult(False, "STATUS: REJECTED"))
+    ev = execute(Action("implement", "quark-kit/01", model="m"), ctx)
+    assert ev.ok is False and "REJECTED" in ev.detail
+    assert _commits(ctx) == 1
+
+
+def test_hk_review_reads_review_json(tmp_path, monkeypatch):
+    (tmp_path / ".agent").mkdir()
+    (tmp_path / ".agent" / "review.json").write_text('{"status": "APPROVED"}')
+    monkeypatch.setattr(hkmod, "HK", "true")
+    assert hkmod.review(str(tmp_path)).approved is True
+    (tmp_path / ".agent" / "review.json").write_text('{"status": "REJECTED", "notes_tail": "bad"}')
+    r = hkmod.review(str(tmp_path))
+    assert r.approved is False and "bad" in r.tail
+
+
+def test_contract_restored_and_scoped_to_ticket(ctx, monkeypatch, tmp_path):
+    agent = os.path.join(_repo(ctx), ".agent")
+    os.makedirs(agent, exist_ok=True)
+    cpath = os.path.join(agent, "contract.json")
+    with open(cpath, "w") as f:
+        json.dump({"base_ref": "develop", "ticket_file": "", "check_commands": ["true"]}, f)
+    ticket = tmp_path / "02-mul.md"
+    ticket.write_text("# 02")
+    ctx.plan.ticket_files["quark-kit/02"] = str(ticket)
+    before = _head(ctx)
+    def worker(*a, **k):
+        _dirty(ctx)
+        with open(cpath, "w") as f:
+            json.dump({"base_ref": "hacked", "ticket_file": "x", "check_commands": []}, f)
+        return OmpResult("done", "")
+    _patch(monkeypatch, "watcher.omp", "run_omp", worker)
+    ev = execute(Action("implement", "quark-kit/02", model="m"), ctx)
+    data = json.load(open(cpath))
+    assert ev.ok is True
+    assert data["base_ref"] == before and data["ticket_file"] == str(ticket)
+    assert data["check_commands"] == ["true"]
+
+
+def test_worker_sees_contract_scoped_to_its_ticket(ctx, monkeypatch, tmp_path):
+    agent = os.path.join(_repo(ctx), ".agent")
+    os.makedirs(agent, exist_ok=True)
+    cpath = os.path.join(agent, "contract.json")
+    with open(cpath, "w") as f:
+        json.dump({"base_ref": "develop", "ticket_file": "old.md"}, f)
+    ticket = tmp_path / "03-pow.md"
+    ticket.write_text("# 03")
+    ctx.plan.ticket_files["quark-kit/03"] = str(ticket)
+    seen = {}
+    def worker(*a, **k):
+        seen.update(json.load(open(cpath)))
+        return OmpResult("question", "q")
+    _patch(monkeypatch, "watcher.omp", "run_omp", worker)
+    execute(Action("implement", "quark-kit/03", model="m"), ctx)
+    assert seen["ticket_file"] == str(ticket) and seen["base_ref"] == _head(ctx)

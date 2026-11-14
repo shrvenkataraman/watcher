@@ -10,6 +10,7 @@ import os
 import pathlib
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 
 from watcher import gitops, hk, llm, omp, prompts, verdict
@@ -28,6 +29,7 @@ WORDS = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES"}
 VERDICTS_DIR = os.path.join(".agent", "verdicts")
 PR_VERDICT_FILE = os.path.join(".agent", "pr-verdict.json")
 REVIEW_TRIES = 2
+LOAD_RETRY_WAIT = float(os.environ.get("WATCHER_LOAD_RETRY_WAIT", "60"))
 
 
 @dataclass(frozen=True)
@@ -53,10 +55,13 @@ def _worktree(ctx: Ctx, key: str) -> str:
     return hk.lane_worktree(ctx.root, ctx.plan.state.prd, key.split("/", 1)[0])
 
 
-def _run(action: Action, ctx: Ctx, wt: str, role: str, **inputs) -> Event | None:
-    """Prompt, run omp once; return the question or timeout event, else None."""
+def _run(action: Action, ctx: Ctx, wt: str, role: str, fail_kind: str = "",
+         **inputs) -> Event | None:
+    """Prompt, run omp once; return the question, timeout or error event, else None."""
     path, task = prompts.write_prompt(role, ctx.prompt_dir, key=action.key, **inputs)
     result = omp.run_omp(role, action.model, wt, path, task)
+    if result.outcome == "error" and fail_kind:
+        return Event(fail_kind, key=action.key, ok=False, detail="omp error: " + result.detail)
     if result.outcome not in STALLS:
         return None
     return Event(STALLS[result.outcome], key=action.key, ok=False, detail=result.detail)
@@ -80,8 +85,32 @@ def _parse(path: str, sha: str) -> verdict.Verdict:
 def _load_model(action: Action, ctx: Ctx) -> Event:
     """Point llama-swap at the model; report whether it answered."""
     ready = llm.ensure_model(action.model)
+    if not ready:  # give the host time to free RAM before the core asks again
+        time.sleep(LOAD_RETRY_WAIT)
     return Event("model_ready" if ready else "model_failed", key=action.key,
                  ok=ready, detail=action.model)
+
+
+def _changed(wt: str) -> bool:
+    """True when the worktree has any change against HEAD (.agent/ is excluded by hk)."""
+    out = subprocess.run(["git", "-C", wt, "status", "--porcelain"],
+                         check=True, capture_output=True, text=True).stdout
+    return any(not line[3:].startswith(".agent/") for line in out.splitlines())
+
+
+def _scope_contract(contract: pathlib.Path, base_sha: str, ticket_file: str) -> None:
+    """Point hk at this ticket only: review diffs base_sha...HEAD against ticket_file."""
+    data = json.loads(contract.read_text(encoding="utf-8"))
+    data["base_ref"] = base_sha
+    if ticket_file:
+        data["ticket_file"] = ticket_file
+    contract.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _discard_source_edits(wt: str) -> None:
+    """Reviewers may write only their verdict under .agent/; drop any other change."""
+    subprocess.run(["git", "-C", wt, "checkout", "--", "."], capture_output=True)
+    subprocess.run(["git", "-C", wt, "clean", "-fdq", "-e", ".agent"], capture_output=True)
 
 
 def _edit(action: Action, ctx: Ctx) -> Event:
@@ -94,13 +123,27 @@ def _edit(action: Action, ctx: Ctx) -> Event:
     answer = pathlib.Path(ctx.prompt_dir, os.pardir, "answers",
                           f"{key.replace('/', '_')}.md")
     failure = answer.read_text(encoding="utf-8") if answer.is_file() else ""
-    stalled = _run(action, ctx, wt, action.kind, ticket_file=ticket_file,
-                   findings=findings, failure=failure)
+    contract = pathlib.Path(wt, ".agent", "contract.json")
+    before = gitops.head(wt)
+    if contract.is_file():  # scope hk to this ticket before the worker sees it
+        _scope_contract(contract, before, ticket_file)
+    saved = contract.read_text(encoding="utf-8") if contract.is_file() else None
+    try:
+        stalled = _run(action, ctx, wt, action.kind, fail_kind=kind, ticket_file=ticket_file,
+                       findings=findings, failure=failure)
+    finally:  # the worker never changes its own gate
+        if saved is not None:
+            contract.write_text(saved, encoding="utf-8")
     if stalled is not None:
         return stalled
+    if not _changed(wt):
+        return Event(kind, key=key, ok=False, detail="noop: the worker changed no files")
     checked = hk.verify(wt)
     if not checked.green:
         return Event(kind, key=key, ok=False, detail=checked.tail)
+    reviewed = hk.review(wt)
+    if not reviewed.approved:
+        return Event(kind, key=key, ok=False, detail="hk review rejected: " + reviewed.tail)
     title = os.path.splitext(os.path.basename(ticket_file))[0] or key
     with gitops.worktree_lock(wt):
         sha = gitops.commit_ticket(wt, key, title, commit_kind)
@@ -116,6 +159,7 @@ def _review(action: Action, ctx: Ctx) -> Event:
     reason = ""
     for _attempt in range(REVIEW_TRIES):
         stalled = _run(action, ctx, wt, "review", ticket_file=ticket_file, commit=sha)
+        _discard_source_edits(wt)
         if stalled is not None:
             return stalled
         try:
@@ -138,6 +182,7 @@ def _pr_review(action: Action, ctx: Ctx) -> Event:
     stalled = _run(action, ctx, wt, "pr_review", diff=diff,
                    spec_file=ctx.plan.specs.get(key.split("/", 1)[0], ""),
                    verdicts="\n".join(p.read_text(encoding="utf-8") for p in files))
+    _discard_source_edits(wt)
     if stalled is not None:
         return stalled
     parsed = _parse(os.path.join(wt, PR_VERDICT_FILE), gitops.head(wt))
