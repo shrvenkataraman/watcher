@@ -25,6 +25,8 @@ def _has_ready(state):
 
 def _dispatch(state):
     actions = []
+    if state["phase"] == "review":
+        return _dispatch_review(state)
     if state["phase"] != "flash":
         return actions
     for lane in state["lanes"]:
@@ -42,6 +44,49 @@ def _dispatch(state):
         state["phase"] = "review"
         state["model"] = ""
         actions.append(_load_action("review"))
+    return actions
+
+
+def _reviewable(state):
+    return any(t["status"] in ("implemented", "fixed")
+               for lane in state["lanes"] for t in lane["tickets"])
+
+
+def _dispatch_review(state):
+    actions = []
+    for lane in state["lanes"]:
+        if lane["busy"]:
+            continue
+        ticket = next((t for t in lane["tickets"] if t["status"] in ("implemented", "fixed")), None)
+        if ticket is None:
+            continue
+        detail = "fixed" if ticket["status"] == "fixed" else ""
+        ticket["status"] = "running"
+        lane["busy"] = True
+        actions.append({"kind": "review", "key": ticket["key"],
+                        "model": PHASE_MODEL["review"], "detail": detail})
+    if not any(lane["busy"] for lane in state["lanes"]) and not _reviewable(state):
+        return _next_phase(state, actions)
+    return actions
+
+
+def _next_phase(state, actions):
+    statuses = [t["status"] for lane in state["lanes"] for t in lane["tickets"]]
+    batches = [t["batch"] for lane in state["lanes"] for t in lane["tickets"]]
+    more = ("changes" in statuses) or any(
+        t["status"] == "pending" and t["batch"] == state["batch"] + 1
+        for lane in state["lanes"] for t in lane["tickets"])
+    if more:
+        state["phase"] = "flash"
+        if not any(t["status"] in ("pending", "running") and t["batch"] == state["batch"]
+                   for lane in state["lanes"] for t in lane["tickets"]):
+            state["batch"] += 1
+        state["model"] = ""
+        actions.append(_load_action("flash"))
+    else:
+        state["phase"] = "pr"
+        state["model"] = ""
+        actions.append(_load_action("pr"))
     return actions
 
 
@@ -63,6 +108,27 @@ def ref_step(state, event):
             return s, [_load_action(s["phase"])]
         s["model"] = event["detail"]
         s["load_tries"] = 0
+        return s, _dispatch(s)
+
+    if kind == "reviewed":
+        target = None
+        for lane in s["lanes"]:
+            for ticket in lane["tickets"]:
+                if ticket["key"] == event["key"] and ticket["status"] == "running":
+                    target = (lane, ticket)
+        if target is None:
+            return s, []
+        lane, ticket = target
+        lane["busy"] = False
+        if event.get("ok", True):
+            ticket["status"] = "approved"
+        elif ticket["fix_rounds"] >= 1:
+            ticket["status"] = "needs_you"
+            s["needs_you"].append({"key": ticket["key"], "reason": "review_rejected_twice",
+                                  "detail": event.get("detail", "")})
+        else:
+            ticket["status"] = "changes"
+            ticket["findings"] = event.get("detail", "")
         return s, _dispatch(s)
 
     if kind == "implemented" and event.get("ok", True):
