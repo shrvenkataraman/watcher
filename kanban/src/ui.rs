@@ -17,12 +17,17 @@ pub struct View {
 }
 
 fn card_text(t: &Ticket) -> String {
-    let short = t.key.split_once('/').map_or(t.key.as_str(), |(_, k)| k);
+    let num = t.key.split_once('/').map_or(t.key.as_str(), |(_, k)| k);
+    let name = if t.title.is_empty() {
+        num.to_string()
+    } else {
+        format!("{num} {}", t.title)
+    };
     if t.sha.is_empty() {
-        short.to_string()
+        name
     } else {
         let sha: String = t.sha.chars().take(7).collect();
-        format!("{short} {sha}")
+        format!("{name} {sha}")
     }
 }
 
