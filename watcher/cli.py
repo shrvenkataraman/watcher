@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from typing import Callable
 
@@ -20,6 +21,7 @@ DETAIL_CHARS = 60
 PROG = "watcher"
 KEY_HELP = "ticket key, for example quark-kit/07"
 WORK_ROOT = os.environ.get("WATCHER_WORK", os.path.expanduser("~/Work"))
+BOARD_BIN = os.environ.get("WATCHER_BOARD", "watcher-kanban")
 
 
 def _resolve_prd(prd: str | None, root: str | None) -> tuple[str | None, str]:
@@ -149,6 +151,7 @@ def _parser() -> argparse.ArgumentParser:
         ("abort", "abort the run", ""),
         ("run", "tick until the run is done", ""), ("tick", "advance one round", ""),
         ("tui", "open the terminal UI", ""),
+        ("board", "open the kanban board", ""),
     ):
         child = sub.add_parser(name, parents=[common], help=help_text)
         for arg in keys.split():
@@ -175,6 +178,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tui":
         prd, message = _resolve_prd(args.prd, args.state_root)
         return _fail(message) if prd is None else tui.main(prd)
+    if args.command == "board":
+        prd, message = _resolve_prd(args.prd, args.state_root)
+        if prd is None:
+            return _fail(message)
+        if shutil.which(BOARD_BIN) is None:
+            return _fail("watcher board: install the board with `cargo install --path kanban`")
+        extra = ["--state-root", args.state_root] if args.state_root else []
+        os.execvp(BOARD_BIN, [BOARD_BIN, "--prd", prd, *extra])
+        return EXIT_OK
     if args.command in ("run", "tick"):  # these two step the pipeline; the rest read it
         if args.prd is None:
             return _fail("--prd is required for run and tick")
