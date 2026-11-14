@@ -1,0 +1,10 @@
+# One watcher run loop per PRD: systemctl --user enable --now watcher@<prd>.service
+[Unit]
+Description=watcher run loop for %i
+
+[Service]
+ExecStart=%h/.local/bin/watcher run --prd %i --inbox %h/Work/inbox/%i
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

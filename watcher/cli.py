@@ -1,4 +1,4 @@
-"""CLI: watcher status|inbox|show|answer|retry|skip|abort (ticket 19).
+"""CLI: watcher status|inbox|show|answer|retry|skip|abort|run|tick (tickets 19, 22).
 
 Commands read state.json and never write it. User input appends one Event line to queue.jsonl.
 """
@@ -11,13 +11,14 @@ import os
 import sys
 from typing import Callable
 
-from . import store
+from . import loop, store
 from .status import render_text, status_doc
 from .types import Event, NeedsYou, State, TicketState, to_json
 
 EXIT_OK, EXIT_USAGE, EXIT_NEEDS_YOU = 0, 2, 3
 DETAIL_CHARS = 60
 KEY_HELP = "ticket key, for example quark-kit/07"
+WORK_ROOT = os.environ.get("WATCHER_WORK", os.path.expanduser("~/Work"))
 
 
 def _resolve_prd(prd: str | None, root: str | None) -> tuple[str | None, str]:
@@ -133,17 +134,27 @@ def _parser() -> argparse.ArgumentParser:
         ("show", "print one ticket", "key"), ("retry", "retry one ticket", "key"),
         ("skip", "skip one ticket", "key"), ("answer", "answer one question", "key text"),
         ("abort", "abort the run", ""),
+        ("run", "tick until the run is done", ""), ("tick", "advance one round", ""),
     ):
         child = sub.add_parser(name, parents=[common], help=help_text)
         for arg in keys.split():
             child.add_argument(arg, help=KEY_HELP if arg == "key" else "the answer text")
         if name == "status":
             child.add_argument("--json", action="store_true", help="print the status JSON")
+        if name in ("run", "tick"):
+            child.add_argument("--inbox", required=True, help="inbox directory to read")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run one CLI command and return its exit code."""
     args = _parser().parse_args(argv)
+    if args.command in ("run", "tick"):  # these two step the pipeline; the rest read it
+        if args.prd is None:
+            return _fail("--prd is required for run and tick")
+        if args.command == "run":
+            return loop.run(args.prd, args.inbox, WORK_ROOT, state_root=args.state_root)
+        loop.tick(args.prd, args.inbox, WORK_ROOT, state_root=args.state_root)
+        return EXIT_OK
     state, code = _load(args)
     return code if state is None else _COMMANDS[args.command](state, args)
