@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# mutmut writes full source copies under mutants/; pytest would collect them as duplicate
+# test modules (module-name collisions, 19 phantom collection errors). Always remove them.
+trap 'rm -rf mutants' EXIT
 
 MUTATION_MIN="${MUTATION_MIN:-80}"
 COVERAGE_MIN="${COVERAGE_MIN:-90}"
