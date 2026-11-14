@@ -22,9 +22,9 @@ def test_AC1_lane_lists_tickets_in_order():
     t2 = TicketState("r/02", 0, depends_on=("r/01",))
     doc = status_doc(State(prd="p", lanes=(Lane("r", (t1, t2)),)))
     assert doc["lanes"][0]["tickets"] == [
-        {"key": "r/01", "status": "approved", "sha": "abc", "depends_on": [],
+        {"key": "r/01", "title": "", "status": "approved", "sha": "abc", "depends_on": [],
          "verify_fails": 0, "fix_rounds": 0},
-        {"key": "r/02", "status": "pending", "sha": "", "depends_on": ["r/01"],
+        {"key": "r/02", "title": "", "status": "pending", "sha": "", "depends_on": ["r/01"],
          "verify_fails": 0, "fix_rounds": 0},
     ]
 
