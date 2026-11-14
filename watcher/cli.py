@@ -11,7 +11,7 @@ import os
 import sys
 from typing import Callable
 
-from . import loop, store, tui
+from . import loop, newinbox, store, tui
 from .status import render_text, status_doc
 from .types import Event, NeedsYou, State, TicketState, to_json
 
@@ -135,6 +135,13 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--prd", default=None, help="prd name (default: the only one)")
     common.add_argument("--state-root", default=None, help="state root holding watcher/")
     sub = parser.add_subparsers(dest="command", required=True)
+    new = sub.add_parser("new", help="build an inbox from a ticket bundle")
+    new.add_argument("--from", dest="bundle", required=True, help="bundle directory")
+    new.add_argument("--repo", required=True, help="repo name")
+    new.add_argument("--prd", required=True, help="prd name")
+    new.add_argument("--check", required=True, help="check command")
+    new.add_argument("--base", default="develop", help="base branch")
+    new.add_argument("--inbox-root", default=None, help="inbox root (default: <work>/inbox)")
     for name, help_text, keys in (
         ("status", "print the status view", ""), ("inbox", "print the NEEDS YOU block", ""),
         ("show", "print one ticket", "key"), ("retry", "retry one ticket", "key"),
@@ -156,6 +163,15 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Run one CLI command and return its exit code."""
     args = _parser().parse_args(_strip_prog(argv))
+    if args.command == "new":
+        root = args.inbox_root or os.path.join(WORK_ROOT, "inbox")
+        try:
+            path = newinbox.build_inbox(args.bundle, args.repo, args.prd, args.check, root,
+                                        base=args.base)
+        except (FileExistsError, ValueError, OSError) as err:
+            return _fail(str(err))
+        print(path)
+        return EXIT_OK
     if args.command == "tui":
         prd, message = _resolve_prd(args.prd, args.state_root)
         return _fail(message) if prd is None else tui.main(prd)
