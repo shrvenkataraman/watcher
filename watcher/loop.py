@@ -17,6 +17,7 @@ from watcher.config import Config, load_config
 from watcher.plugins import build_adapters
 from watcher import core, executor, gh, gitops, hk, report, resume, store
 from watcher import inbox as inboxmod
+from watcher import lease as leasemod
 from watcher.types import PHASE_MODEL, Action, Event, State, event_from_json
 
 RECONCILED: set[str] = set()  # state directories whose git history this process read
@@ -120,6 +121,7 @@ def tick(prd: str, inbox: str, root: str, state_root: str | None = None,
             return True
         cfg = cfg or load_config()
         adapters = build_adapters(cfg)
+        lease = leasemod.Lease(leasemod.lease_dir(state_root))
         plan = inboxmod.load_inbox(inbox)
         with open(os.path.join(inbox, inboxmod.MANIFEST_FILE), encoding="utf-8") as handle:
             manifest = json.load(handle)
@@ -138,20 +140,23 @@ def tick(prd: str, inbox: str, root: str, state_root: str | None = None,
             state = saved
         ctx = executor.Ctx(plan=plan, root=root, check=checks,
                            prompt_dir=os.path.join(directory, "prompts"), adapters=adapters,
-                           templates=cfg.prompt_dir)
+                           templates=cfg.prompt_dir, lease=lease)
         # One `start` per process, and again only after something else happened,
         # so an idle run waiting on the user does not grow the event log.
         events = store.read_events(prd, state_root)
         first = directory not in STARTED or not events or events[-1].kind != "start"
         STARTED.add(directory)
         pending = deque([*([Event("start")] if first else []), *_drain_queue(prd, state_root)])
-        while pending:
-            store.append_event(prd, event := pending.popleft(), state_root)
-            state, actions = core.step(state, event)
-            store.save(state, state_root)
-            for action in actions:
-                if (ev := _act(action, state, plan, ctx, prd, state_root, now)) is not None:
-                    pending.append(ev)
+        try:
+            while pending:
+                store.append_event(prd, event := pending.popleft(), state_root)
+                state, actions = core.step(state, event)
+                store.save(state, state_root)
+                for action in actions:
+                    if (ev := _act(action, state, plan, ctx, prd, state_root, now)) is not None:
+                        pending.append(ev)
+        finally:
+            lease.release()
         if state.phase == "done":
             report.write_summary(state, store.read_events(prd, state_root),
                                  os.path.join(directory, "summary.md"), now())

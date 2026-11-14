@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 from watcher import gitops, prompts, verdict
+from watcher import lease as leasemod
 from watcher.adapters import default_adapters
 from watcher.inbox import Plan
 from watcher.ports import Adapters
@@ -32,6 +33,7 @@ VERDICTS_DIR = os.path.join(".agent", "verdicts")
 PR_VERDICT_FILE = os.path.join(".agent", "pr-verdict.json")
 REVIEW_TRIES = 2
 LOAD_RETRY_WAIT = float(os.environ.get("WATCHER_LOAD_RETRY_WAIT", "60"))
+LEASE_WAIT = 1800.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class Ctx:
     check: dict[str, str]
     adapters: Adapters = field(default_factory=default_adapters)
     templates: str = ""
+    lease: "leasemod.Lease | None" = None  # None: no lease, as before
 
 
 def execute(action: Action, ctx: Ctx) -> Event | None:
@@ -89,6 +92,11 @@ def _parse(path: str, sha: str) -> verdict.Verdict:
 
 def _load_model(action: Action, ctx: Ctx) -> Event:
     """Point llama-swap at the model; report whether it answered."""
+    if ctx.lease is not None:
+        try:
+            ctx.lease.acquire(action.model, timeout=LEASE_WAIT)
+        except leasemod.LeaseTimeout:
+            return Event("model_failed", key=action.key, ok=False, detail="lease timeout")
     ready = ctx.adapters.model_server.ensure_model(action.model)
     if not ready:  # give the host time to free RAM before the core asks again
         time.sleep(LOAD_RETRY_WAIT)
