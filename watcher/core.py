@@ -14,12 +14,23 @@ from .types import PHASE_MODEL, Action, Event, Lane, NeedsYou, State, TicketStat
 REVIEWABLE_STATUSES = ("implemented", "fixed")
 
 
+def status(state: State, key: str) -> str:
+    """Status of the ticket with this key, or "" when no lane carries it."""
+    for lane in state.lanes:
+        for ticket in lane.tickets:
+            if ticket.key == key:
+                return ticket.status
+    return ""
+
+
 def ready_tickets(state: State, lane: Lane) -> list[TicketState]:
-    """Tickets this lane may take now: status pending, batch within state.batch."""
+    """Tickets this lane may take now: pending, batch within state.batch, deps approved."""
     return [
         ticket
         for ticket in lane.tickets
-        if ticket.status == "pending" and ticket.batch <= state.batch
+        if ticket.status == "pending"
+        and ticket.batch <= state.batch
+        and all(status(state, dep) == "approved" for dep in ticket.depends_on)
     ]
 
 
@@ -182,14 +193,45 @@ def _skip(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     return _dispatch(_drop_needs(state, event.key))
 
 
-def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
-    """Give one ticket to every idle lane, then end the phase if nothing is left."""
-    if state.phase == "review":
-        return _dispatch_review(state)
-    if state.phase != "flash":
-        return state, ()
+def _block_check(
+    state: State,
+) -> tuple[State, tuple[Action, ...]]:
+    """Park every pending ticket whose dependency is parked or skipped.
 
+    Parked first, so a dependency parked here blocks its own dependents in the
+    same pass. The dependency key goes into the needs_you detail, so `retry`
+    names the dependency the human has to answer.
+    """
     actions: list[Action] = []
+    for i, _ in enumerate(state.lanes):
+        for ticket in state.lanes[i].tickets:
+            if ticket.status != "pending":
+                continue
+            dep = next(
+                (d for d in ticket.depends_on
+                 if status(state, d) in ("needs_you", "skipped")),
+                None,
+            )
+            if dep is None:
+                continue
+            state = _place(state, i, replace(ticket, status="needs_you"))
+            state = replace(state, needs_you=state.needs_you + (
+                NeedsYou(ticket.key, "dependency_blocked", dep),))
+            actions.append(
+                Action("notify", key=ticket.key, detail=f"dependency_blocked: {ticket.key}"))
+    return state, tuple(actions)
+
+
+def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
+    """Release blocked tickets, give one ticket to every idle lane, then end the phase."""
+    state, block_actions = _block_check(state)
+    if state.phase == "review":
+        review_state, review_actions = _dispatch_review(state)
+        return review_state, block_actions + review_actions
+    if state.phase != "flash":
+        return state, block_actions
+
+    actions: list[Action] = list(block_actions)
     lanes: list[Lane] = []
 
     for lane in state.lanes:
@@ -238,9 +280,8 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
         ready_tickets(state, lane) or fixable_tickets(lane) for lane in state.lanes)
     if not busy and not work:
         review_model = PHASE_MODEL["review"]
-        return replace(state, phase="review", model=""), (
-            Action("load_model", model=review_model),
-        )
+        actions.append(Action("load_model", model=review_model))
+        return replace(state, phase="review", model=""), tuple(actions)
 
     return state, tuple(actions)
 
