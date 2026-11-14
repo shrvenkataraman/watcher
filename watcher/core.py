@@ -50,12 +50,17 @@ def finished(lane: Lane) -> bool:
     return all(t.status in ("approved", "skipped") for t in lane.tickets)
 
 
+def model_for(state: State, phase: str) -> str | None:
+    """The model for a phase: the run's override, else the default."""
+    return dict(state.models).get(phase, PHASE_MODEL.get(phase))
+
+
 LOAD_TRIES = 3  # a Flash-Next start can fail while RAM frees up after a swap
 
 
 def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     """Return the next state and the actions for one event."""
-    wanted = PHASE_MODEL.get(state.phase)
+    wanted = model_for(state, state.phase)
 
     if event.kind in ("start", "model_ready"):
         # `start` asks for the phase model, so it compares against the loaded model.
@@ -180,7 +185,7 @@ def _model_failed(
     """Retry a model load twice, then park `model` for a human."""
     state = replace(state, load_tries=state.load_tries + 1)
     if state.load_tries < LOAD_TRIES:
-        return state, (Action("load_model", model=PHASE_MODEL.get(state.phase)),)
+        return state, (Action("load_model", model=model_for(state, state.phase)),)
     entry = NeedsYou("model", "model_failed", event.detail)
     return replace(state, needs_you=state.needs_you + (entry,)), (
         Action("notify", key=entry.key, detail=f"{entry.reason}: {entry.key}"),)
@@ -203,7 +208,7 @@ def _user_release(
     """answered and retry requeue a parked ticket; retry model reloads the model."""
     if event.kind == "retry" and event.key == "model":
         state = replace(_drop_needs(state, "model"), load_tries=0)
-        return state, (Action("load_model", model=PHASE_MODEL.get(state.phase)),)
+        return state, (Action("load_model", model=model_for(state, state.phase)),)
     found = _locate(state, event.key, "needs_you") or _locate(state, event.key)
     if found:
         i, ticket = found
@@ -277,7 +282,7 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
                 Action(
                     "pr_fix",
                     key=lane.repo,
-                    model=PHASE_MODEL["flash"],
+                    model=model_for(state, "flash"),
                     detail=lane.pr_status[len(OBJECTION_PREFIX):],
                 )
             )
@@ -297,13 +302,13 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
                 Action(
                     "fix",
                     key=ticket.key,
-                    model=PHASE_MODEL[state.phase],
+                    model=model_for(state, state.phase),
                     detail=ticket.findings,
                 )
             )
         else:
             actions.append(
-                Action("implement", key=ticket.key, model=PHASE_MODEL[state.phase])
+                Action("implement", key=ticket.key, model=model_for(state, state.phase))
             )
         lanes.append(
             replace(
@@ -330,9 +335,9 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
             finished(lane) and lane.pr_status == "none" and lane.pr_tries == 1
             for lane in state.lanes
         ):
-            actions.append(Action("load_model", model=PHASE_MODEL["pr"]))
+            actions.append(Action("load_model", model=model_for(state, "pr")))
             return replace(state, phase="pr", model=""), tuple(actions)
-        review_model = PHASE_MODEL["review"]
+        review_model = model_for(state, "review")
         actions.append(Action("load_model", model=review_model))
         return replace(state, phase="review", model=""), tuple(actions)
 
@@ -350,7 +355,7 @@ def _dispatch_pr(
         if lane.busy or lane.pr_status != "none" or not finished(lane):
             lanes.append(lane)
             continue
-        pr_actions.append(Action("pr_review", key=lane.repo, model=PHASE_MODEL["pr"]))
+        pr_actions.append(Action("pr_review", key=lane.repo, model=model_for(state, "pr")))
         lanes.append(replace(lane, busy=True, pr_status="running"))
 
     state = replace(state, lanes=tuple(lanes))
@@ -378,9 +383,9 @@ def _back_to_work(state: State, actions: tuple[Action, ...]) -> tuple[State, tup
     """A ticket released in the pr phase goes back through review or flash."""
     if any(t.status in ("implemented", "fixed") for lane in state.lanes for t in lane.tickets):
         return replace(state, phase="review", model=""), actions + (
-            Action("load_model", model=PHASE_MODEL["review"]),)
+            Action("load_model", model=model_for(state, "review")),)
     return replace(state, phase="flash", model=""), actions + (
-        Action("load_model", model=PHASE_MODEL["flash"]),)
+        Action("load_model", model=model_for(state, "flash")),)
 
 
 def _pr_phase_end(
@@ -393,7 +398,7 @@ def _pr_phase_end(
         return state, actions
     if any(lane.pr_status.startswith(OBJECTION_PREFIX) for lane in state.lanes):
         return replace(state, phase="flash", model=""), actions + (
-            Action("load_model", model=PHASE_MODEL["flash"]),
+            Action("load_model", model=model_for(state, "flash")),
         )
     return replace(state, phase="done"), actions + (Action("write_summary"),)
 
@@ -466,7 +471,7 @@ def _dispatch_review(state: State) -> tuple[State, tuple[Action, ...]]:
             Action(
                 "review",
                 key=ticket.key,
-                model=PHASE_MODEL["review"],
+                model=model_for(state, "review"),
                 detail="fixed" if ticket.status == "fixed" else "",
             )
         )
@@ -508,7 +513,7 @@ def _next_phase(state: State) -> tuple[State, tuple[Action, ...]]:
     ready_now = any(ready_tickets(state, lane) for lane in state.lanes)
     if not changes and not next_batch_pending and not ready_now:
         return replace(state, phase="pr", model=""), (
-            Action("load_model", model=PHASE_MODEL["pr"]),
+            Action("load_model", model=model_for(state, "pr")),
         )
 
     current_open = any(
@@ -518,7 +523,7 @@ def _next_phase(state: State) -> tuple[State, tuple[Action, ...]]:
     )
     batch = state.batch if current_open else state.batch + 1
     return replace(state, phase="flash", batch=batch, model=""), (
-        Action("load_model", model=PHASE_MODEL["flash"]),
+        Action("load_model", model=model_for(state, "flash")),
     )
 
 
