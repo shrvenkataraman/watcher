@@ -119,3 +119,45 @@ pub fn parse(json: &str) -> Result<Board, String> {
         lanes,
     })
 }
+
+/// Boards in input order. Returns the merged board and, per merged lane, the prd it came from.
+pub fn merge(boards: Vec<Board>) -> (Board, Vec<String>) {
+    let mut lanes: Vec<Lane> = Vec::new();
+    let mut prds: Vec<String> = Vec::new();
+    let mut needs_you = 0usize;
+    let mut phases: Vec<String> = Vec::new();
+    let mut models: Vec<String> = Vec::new();
+
+    for board in boards {
+        let Board { prd, phase, model, needs_you: board_needs_you, lanes: board_lanes } = board;
+        needs_you += board_needs_you;
+        if !phase.is_empty() && !phases.contains(&phase) {
+            phases.push(phase);
+        }
+        if !model.is_empty() && !models.contains(&model) {
+            models.push(model);
+        }
+        for lane in board_lanes {
+            lanes.push(Lane {
+                repo: format!("{}/{}", prd, lane.repo),
+                pr_status: lane.pr_status,
+                columns: lane.columns,
+            });
+            prds.push(prd.clone());
+        }
+    }
+
+    phases.sort();
+    models.sort();
+
+    (
+        Board {
+            prd: "all".to_string(),
+            phase: phases.join(","),
+            model: models.join(","),
+            needs_you,
+            lanes,
+        },
+        prds,
+    )
+}
