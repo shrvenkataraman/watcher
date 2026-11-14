@@ -12,6 +12,7 @@ from dataclasses import replace
 from .types import PHASE_MODEL, Action, Event, Lane, NeedsYou, State, TicketState
 
 REVIEWABLE_STATUSES = ("implemented", "fixed")
+OBJECTION_PREFIX = "objected:"
 
 
 def status(state: State, key: str) -> str:
@@ -44,6 +45,11 @@ def fixable_tickets(lane: Lane) -> list[TicketState]:
     return [t for t in lane.tickets if t.status == "changes"]
 
 
+def finished(lane: Lane) -> bool:
+    """Every ticket of this lane is approved or skipped, so the lane can take a PR."""
+    return all(t.status in ("approved", "skipped") for t in lane.tickets)
+
+
 def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     """Return the next state and the actions for one event."""
     wanted = PHASE_MODEL.get(state.phase)
@@ -67,6 +73,11 @@ def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
         if marked is None:
             return state, ()
         return _dispatch(marked)
+
+    if event.kind == "pr_reviewed":
+        return _pr_reviewed(state, event)
+    if event.kind == "pr_fixed":
+        return _pr_fixed(state, event)
 
     if event.kind in ("implemented", "fixed") and not event.ok:
         return _verify_failed(state, event)
@@ -112,6 +123,21 @@ def _place(state: State, i: int, ticket: TicketState, busy: bool = False) -> Sta
 def _drop_needs(state: State, key: str) -> State:
     """Drop every needs_you entry that carries this key."""
     return replace(state, needs_you=tuple(n for n in state.needs_you if n.key != key))
+
+
+def _lane_by_repo(state: State, repo: str) -> tuple[int, Lane] | None:
+    """Index and lane whose repo is this key, or None when no lane carries it."""
+    for i, lane in enumerate(state.lanes):
+        if lane.repo == repo:
+            return i, lane
+    return None
+
+
+def _set_lane(state: State, i: int, lane: Lane) -> State:
+    """Swap lane `i` for `lane`, leave every other lane as it was."""
+    lanes = list(state.lanes)
+    lanes[i] = lane
+    return replace(state, lanes=tuple(lanes))
 
 
 def _park(
@@ -225,6 +251,8 @@ def _block_check(
 def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     """Release blocked tickets, give one ticket to every idle lane, then end the phase."""
     state, block_actions = _block_check(state)
+    if state.phase == "pr":
+        return _dispatch_pr(state, block_actions)
     if state.phase == "review":
         review_state, review_actions = _dispatch_review(state)
         return review_state, block_actions + review_actions
@@ -237,6 +265,19 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     for lane in state.lanes:
         if lane.busy:
             lanes.append(lane)
+            continue
+        # A lane whose PR review objected spends this flash phase on the fix. The
+        # objection text stays in pr_status, so no new state field carries it.
+        if lane.pr_status.startswith(OBJECTION_PREFIX) and finished(lane):
+            actions.append(
+                Action(
+                    "pr_fix",
+                    key=lane.repo,
+                    model=PHASE_MODEL["flash"],
+                    detail=lane.pr_status[len(OBJECTION_PREFIX):],
+                )
+            )
+            lanes.append(replace(lane, busy=True, pr_status="fixing"))
             continue
         fix = next((t for t in lane.tickets if t.status == "changes"), None)
         ready = ready_tickets(state, lane)
@@ -279,11 +320,102 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     work = any(
         ready_tickets(state, lane) or fixable_tickets(lane) for lane in state.lanes)
     if not busy and not work:
+        # A lane that already spent its one PR retry goes back for a second review,
+        # instead of a review phase over tickets that are all approved.
+        if any(
+            finished(lane) and lane.pr_status == "none" and lane.pr_tries == 1
+            for lane in state.lanes
+        ):
+            actions.append(Action("load_model", model=PHASE_MODEL["pr"]))
+            return replace(state, phase="pr", model=""), tuple(actions)
         review_model = PHASE_MODEL["review"]
         actions.append(Action("load_model", model=review_model))
         return replace(state, phase="review", model=""), tuple(actions)
 
     return state, tuple(actions)
+
+
+def _dispatch_pr(
+    state: State, actions: tuple[Action, ...]
+) -> tuple[State, tuple[Action, ...]]:
+    """Give one PR review to every idle, finished lane whose pr_status is still none."""
+    lanes: list[Lane] = []
+    pr_actions = list(actions)
+
+    for lane in state.lanes:
+        if lane.busy or lane.pr_status != "none" or not finished(lane):
+            lanes.append(lane)
+            continue
+        pr_actions.append(Action("pr_review", key=lane.repo, model=PHASE_MODEL["pr"]))
+        lanes.append(replace(lane, busy=True, pr_status="running"))
+
+    return replace(state, lanes=tuple(lanes)), tuple(pr_actions)
+
+
+def _pr_phase_end(
+    state: State, actions: tuple[Action, ...]
+) -> tuple[State, tuple[Action, ...]]:
+    """Close the pr round once no lane is busy: objections go to flash, else done."""
+    if state.phase != "pr" or any(lane.busy for lane in state.lanes):
+        return state, actions
+    if any(finished(lane) and lane.pr_status == "none" for lane in state.lanes):
+        return state, actions
+    if any(lane.pr_status.startswith(OBJECTION_PREFIX) for lane in state.lanes):
+        return replace(state, phase="flash", model=""), actions + (
+            Action("load_model", model=PHASE_MODEL["flash"]),
+        )
+    return replace(state, phase="done"), actions + (Action("write_summary"),)
+
+
+def _pr_reviewed(
+    state: State, event: Event
+) -> tuple[State, tuple[Action, ...]]:
+    """Record a PR verdict: open the PR, spend the one retry, or park the repo."""
+    found = _lane_by_repo(state, event.key)
+    if found is None or found[1].pr_status != "running":
+        return state, ()
+    i, lane = found
+    lane = replace(lane, busy=False)
+
+    if event.ok:
+        state = _set_lane(state, i, replace(lane, pr_status="approved"))
+        actions: tuple[Action, ...] = (Action("open_pr", key=lane.repo),)
+    elif lane.pr_tries == 0:
+        # The first objection keeps the lane free and emits nothing: the flash
+        # phase end is what routes this repo to pr_fix.
+        state = _set_lane(state, i, replace(
+            lane, pr_tries=1, pr_status=OBJECTION_PREFIX + event.detail))
+        actions = ()
+    else:
+        state = _parked_repo(state, i, lane, event.detail)
+        actions = (_notify_repo(lane.repo, event.detail),)
+    return _pr_phase_end(state, actions)
+
+
+def _pr_fixed(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
+    """Record a pr_fix result: clear the objection, or treat a failure as a second one."""
+    found = _lane_by_repo(state, event.key)
+    if found is None or found[1].pr_status != "fixing":
+        return state, ()
+    i, lane = found
+    lane = replace(lane, busy=False)
+
+    if not event.ok:
+        state = _parked_repo(state, i, lane, event.detail)
+        return state, (_notify_repo(lane.repo, event.detail),)
+    return _dispatch(_set_lane(state, i, replace(lane, pr_status="none")))
+
+
+def _parked_repo(state: State, i: int, lane: Lane, detail: str) -> State:
+    """This lane goes to Needs you with reason `pr_objected_twice`."""
+    state = _set_lane(state, i, replace(lane, pr_status="needs_you"))
+    return replace(state, needs_you=state.needs_you + (
+        NeedsYou(lane.repo, "pr_objected_twice", detail),))
+
+
+def _notify_repo(repo: str, detail: str) -> Action:
+    """Tell the human this repo got its second PR objection."""
+    return Action("notify", key=repo, detail=f"pr_objected_twice: {repo}")
 
 
 def _dispatch_review(state: State) -> tuple[State, tuple[Action, ...]]:
