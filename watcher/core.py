@@ -82,6 +82,12 @@ LOAD_TRIES = 3  # a Flash-Next start can fail while RAM frees up after a swap
 
 
 def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
+    """Return the next state and the actions, with a blocked ticket pulled back."""
+    new, actions = _step(state, event)
+    return _requeue_blocked(new), actions
+
+
+def _step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     """Return the next state and the actions for one event."""
     wanted = model_for(state, state.phase)
 
@@ -290,6 +296,29 @@ def _block_check(
                 blocked.add(ticket.key)
                 changed = True
     return state, tuple(actions)
+
+
+def _requeue_blocked(state: State) -> State:
+    """running/changes tickets with a needs_you dependency become pending.
+
+    A lane takes its work off the queue, so a ticket that is already `running` or
+    `changes` keeps that status while its dependency waits for a human. It goes
+    back to `pending` here, and `ready_tickets` hands it out again once the
+    dependency is approved. `fix_rounds` and `sha` stay on the ticket. No action
+    and no needs_you entry comes from this rule; the dependency already owns the
+    entry. This runs after `_block_check`, so a `skipped` dependency still parks
+    its dependents with the deps-wait rule.
+    """
+    for i, lane in enumerate(state.lanes):
+        tickets = tuple(
+            replace(ticket, status="pending")
+            if ticket.status in ("running", "changes")
+            and any(status(state, dep) == "needs_you" for dep in ticket.depends_on)
+            else ticket
+            for ticket in lane.tickets
+        )
+        state = _set_lane(state, i, replace(lane, tickets=tickets))
+    return state
 
 
 def _hold_done(
