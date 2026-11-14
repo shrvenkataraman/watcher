@@ -8,7 +8,7 @@ fn screen(title: &str, sha: &str) -> String {
     columns[0] = vec![t];
     let board = Board { prd: "p".into(), phase: String::new(), model: String::new(), needs_you: 0,
         lanes: vec![Lane { repo: "r/p".into(), pr_status: "none".into(), columns }] };
-    let mut term = Terminal::new(TestBackend::new(160, 20)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(300, 20)).unwrap();
     term.draw(|f| draw(f, &board, &View { lane: 0, column: 0, row: 0 }, "")).unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
@@ -27,7 +27,10 @@ fn ac1_card_shows_number_and_title() {
 #[test]
 fn ac2_card_without_title_shows_number_only() {
     let s = screen("", "");
-    assert!(s.contains("03") && !s.contains("03 "), "{s}");
+    let bytes = s.as_bytes();
+    let i = s.find("03").expect("card number");
+    assert!(bytes.get(i + 2).map_or(true, |c| *c == b' '), "{s}");
+    assert!(bytes.get(i + 3).map_or(true, |c| *c == b' '), "{s}");
 }
 
 // AC3
