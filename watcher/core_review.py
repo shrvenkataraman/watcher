@@ -64,6 +64,10 @@ def _next_phase(state: State) -> tuple[State, tuple[Action, ...]]:
     )
     ready_now = any(_core.ready_tickets(state, lane) for lane in state.lanes)
     if not changes and not next_batch_pending and not ready_now:
+        if _core.waiting_on_human(state):
+            # A pending ticket waits on a needs_you dependency. Leaving review for
+            # pr would end the run while that ticket can never run, so stay here.
+            return state, ()
         return replace(state, phase="pr", model=""), (
             Action("load_model", model=_core.model_for(state, "pr")),
         )

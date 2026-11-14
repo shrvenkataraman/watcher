@@ -49,16 +49,13 @@ def test_AC2_approved_dependency_dispatches_the_dependent():
     assert [(a.kind, a.key) for a in actions] == [("implement", "qk/02")]
 
 
-def test_AC3_parked_dependency_parks_the_dependent():
+def test_AC3_parked_dependency_leaves_the_dependent_pending():
     dep = TicketState("qr/01", 0, status="needs_you")
     s = _two_lanes(_dep(("qr/01",)), dep, needs=(NeedsYou("qr/01", "question", "why"),))
     new, actions = step(s, Event("model_ready", detail=FLASH))
-    parked = new.lanes[0].tickets[0]
-    assert parked.status == "needs_you"
-    entry = next(n for n in new.needs_you if n.key == "qk/02")
-    assert entry.reason == "dependency_blocked" and entry.detail == "qr/01"
-    notify = next(a for a in actions if a.kind == "notify" and a.key == "qk/02")
-    assert notify.detail == "dependency_blocked: qk/02"
+    assert new.lanes[0].tickets[0].status == "pending"
+    assert not any(n.key == "qk/02" for n in new.needs_you)
+    assert not any(a.kind == "notify" for a in actions)
 
 
 def test_AC3_skipped_dependency_parks_the_dependent():
@@ -108,13 +105,13 @@ class DependsMachine(RuleBasedStateMachine):
         for a in actions:
             if a.kind == "implement":
                 assert all(new_status.get(d) == "approved" for d in new_deps[a.key]), (a, new_status)
-        # no pending ticket ever keeps a skipped or needs_you dependency
+        # no pending ticket ever keeps a skipped dependency (needs_you only waits)
         for lane in new.lanes:
             for t in lane.tickets:
                 if t.status == "pending":
                     dep_status = {d: next(x.status for ln in new.lanes for x in ln.tickets
                                           if x.key == d) for d in t.depends_on}
-                    assert not any(v in ("skipped", "needs_you") for v in dep_status.values()), t
+                    assert not any(v == "skipped" for v in dep_status.values()), t
         self.state = new
         self.ref = ref_new
 
