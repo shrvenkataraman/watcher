@@ -10,9 +10,19 @@ PHASE_MODEL = {"flash": "qwen3.8-flash-next", "review": "qwen3.8-27b-w8a8",
                "pr": "glm-5.3-flash-maya", "done": None}
 
 
+def _status(state, key):
+    for lane in state["lanes"]:
+        for t in lane["tickets"]:
+            if t["key"] == key:
+                return t["status"]
+    return ""
+
+
 def ready_tickets(state, lane):
-    """Pending tickets of this lane with batch <= state.batch, in order."""
-    return [t for t in lane["tickets"] if t["status"] == "pending" and t["batch"] <= state["batch"]]
+    """Pending tickets of this lane with batch <= state.batch and all deps approved, in order."""
+    return [t for t in lane["tickets"]
+            if t["status"] == "pending" and t["batch"] <= state["batch"]
+            and all(_status(state, d) == "approved" for d in t["depends_on"])]
 
 
 def _load_action(phase):
@@ -27,10 +37,30 @@ def _has_changes(state):
     return any(t["status"] == "changes" for lane in state["lanes"] for t in lane["tickets"])
 
 
-def _dispatch(state):
+def _block_check(state):
+    """Park pending tickets whose dependency is needs_you or skipped. Return notify actions."""
     actions = []
+    for lane in state["lanes"]:
+        for t in lane["tickets"]:
+            if t["status"] != "pending":
+                continue
+            dep = next((d for d in t["depends_on"]
+                        if _status(state, d) in ("needs_you", "skipped")), None)
+            if dep is None:
+                continue
+            t["status"] = "needs_you"
+            lane["busy"] = False
+            state["needs_you"].append({"key": t["key"], "reason": "dependency_blocked",
+                                       "detail": dep})
+            actions.append({"kind": "notify", "key": t["key"], "model": "",
+                            "detail": f"dependency_blocked: {t['key']}"})
+    return actions
+
+
+def _dispatch(state):
+    actions = _block_check(state)
     if state["phase"] == "review":
-        return _dispatch_review(state)
+        return actions + _dispatch_review(state)
     if state["phase"] != "flash":
         return actions
     for lane in state["lanes"]:
