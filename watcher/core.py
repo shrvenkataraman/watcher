@@ -28,6 +28,11 @@ def reviewable_tickets(lane: Lane) -> list[TicketState]:
     return [t for t in lane.tickets if t.status in REVIEWABLE_STATUSES]
 
 
+def fixable_tickets(lane: Lane) -> list[TicketState]:
+    """Tickets this lane must fix first: status changes, rejected by review."""
+    return [t for t in lane.tickets if t.status == "changes"]
+
+
 def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     """Return the next state and the actions for one event."""
     wanted = PHASE_MODEL.get(state.phase)
@@ -42,6 +47,9 @@ def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
 
     if event.kind == "implemented" and event.ok:
         return _dispatch(_mark_implemented(state, event))
+
+    if event.kind == "fixed" and event.ok:
+        return _dispatch(_mark_fixed(state, event))
 
     if event.kind == "reviewed":
         marked = _mark_reviewed(state, event)
@@ -63,16 +71,31 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     lanes: list[Lane] = []
 
     for lane in state.lanes:
-        ready = [] if lane.busy else ready_tickets(state, lane)
-        if not ready:
+        if lane.busy:
             lanes.append(lane)
             continue
-        ticket = ready[0]
+        fix = next((t for t in lane.tickets if t.status == "changes"), None)
+        ready = ready_tickets(state, lane)
+        if fix is None and not ready:
+            lanes.append(lane)
+            continue
+        # A rejected ticket gets its one fix before any new implement in this lane.
+        ticket = fix if fix is not None else ready[0]
         # The action names the phase model, not state.model: a wrong-model
         # model_ready event clears state.model while the phase still runs.
-        actions.append(
-            Action("implement", key=ticket.key, model=PHASE_MODEL[state.phase])
-        )
+        if fix is not None:
+            actions.append(
+                Action(
+                    "fix",
+                    key=ticket.key,
+                    model=PHASE_MODEL[state.phase],
+                    detail=ticket.findings,
+                )
+            )
+        else:
+            actions.append(
+                Action("implement", key=ticket.key, model=PHASE_MODEL[state.phase])
+            )
         lanes.append(
             replace(
                 lane,
@@ -89,7 +112,8 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     state = replace(state, lanes=tuple(lanes))
 
     busy = any(lane.busy for lane in state.lanes)
-    work = any(ready_tickets(state, lane) for lane in state.lanes)
+    work = any(
+        ready_tickets(state, lane) or fixable_tickets(lane) for lane in state.lanes)
     if not busy and not work:
         review_model = PHASE_MODEL["review"]
         return replace(state, phase="review", model=""), (
@@ -208,6 +232,33 @@ def _mark_reviewed(state: State, event: Event) -> State | None:
         ),
     )
     return replace(state, lanes=tuple(lanes), needs_you=state.needs_you + entry)
+
+
+def _mark_fixed(state: State, event: Event) -> State:
+    """Record a fix result: ticket fixed with its sha, one round spent, lane free."""
+    lanes: list[Lane] = []
+    for lane in state.lanes:
+        if not any(ticket.key == event.key for ticket in lane.tickets):
+            lanes.append(lane)
+            continue
+        lanes.append(
+            replace(
+                lane,
+                busy=False,
+                tickets=tuple(
+                    replace(
+                        ticket,
+                        status="fixed",
+                        sha=event.sha,
+                        fix_rounds=ticket.fix_rounds + 1,
+                    )
+                    if ticket.key == event.key
+                    else ticket
+                    for ticket in lane.tickets
+                ),
+            )
+        )
+    return replace(state, lanes=tuple(lanes))
 
 
 def _mark_implemented(state: State, event: Event) -> State:
