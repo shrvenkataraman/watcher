@@ -36,7 +36,10 @@ def _pr_status(value: str) -> str:
 def _lane_doc(lane: Lane) -> dict[str, Any]:
     """Build one lane's entry in the status document."""
     return {"repo": lane.repo, "busy": lane.busy, "pr_status": _pr_status(lane.pr_status),
-            "counts": _counts(lane), "running": _running(lane)}
+            "counts": _counts(lane), "running": _running(lane),
+            "tickets": [{"key": t.key, "status": t.status, "sha": t.sha,
+                         "depends_on": list(t.depends_on), "verify_fails": t.verify_fails,
+                         "fix_rounds": t.fix_rounds} for t in lane.tickets]}
 
 
 def status_doc(state: State) -> dict:
