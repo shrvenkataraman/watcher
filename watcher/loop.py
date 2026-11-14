@@ -23,6 +23,24 @@ from watcher.types import PHASE_MODEL, Action, Event, State, event_from_json
 RECONCILED: set[str] = set()  # state directories whose git history this process read
 STARTED: set[str] = set()  # state directories this process already sent `start` for
 
+PHASE_ROLE = {"flash": "working", "review": "review", "pr": "pr"}
+
+
+def queue_counts(state: State) -> dict[str, int]:
+    """Count the tickets this project still has work for, per lease role."""
+    statuses = {t.key: t.status for lane in state.lanes for t in lane.tickets}
+    working = sum(
+        1 for lane in state.lanes for t in lane.tickets
+        if t.status in ("pending", "changes")
+        and not any(statuses.get(d) in ("needs_you", "skipped") for d in t.depends_on)
+    )
+    review = sum(1 for lane in state.lanes for t in lane.tickets
+                 if t.status == "implemented")
+    pr = sum(1 for lane in state.lanes
+             if all(t.status in ("approved", "skipped") for t in lane.tickets)
+             and lane.pr_status != "approved")
+    return {"working": working, "review": review, "pr": pr}
+
 
 def _check(manifest: dict, repo: str) -> str:
     """The check command for a repo: its manifest entry first, then the manifest top."""
@@ -121,7 +139,8 @@ def tick(prd: str, inbox: str, root: str, state_root: str | None = None,
             return True
         cfg = cfg or load_config()
         adapters = build_adapters(cfg)
-        lease = leasemod.Lease(leasemod.lease_dir(state_root))
+        lease_directory = leasemod.lease_dir(state_root)
+        lease = leasemod.Lease(lease_directory)
         plan = inboxmod.load_inbox(inbox)
         with open(os.path.join(inbox, inboxmod.MANIFEST_FILE), encoding="utf-8") as handle:
             manifest = json.load(handle)
@@ -152,10 +171,16 @@ def tick(prd: str, inbox: str, root: str, state_root: str | None = None,
                 store.append_event(prd, event := pending.popleft(), state_root)
                 state, actions = core.step(state, event)
                 store.save(state, state_root)
+                leasemod.publish(lease_directory, prd, queue_counts(state))
+                lease.role = PHASE_ROLE.get(state.phase)
+                if state.phase == "done":
+                    leasemod.clear(lease_directory, prd)
                 for action in actions:
                     if (ev := _act(action, state, plan, ctx, prd, state_root, now)) is not None:
                         pending.append(ev)
         finally:
+            if state.phase == "done":  # a finished project holds no queue
+                leasemod.clear(lease_directory, prd)
             lease.release()
         if state.phase == "done":
             report.write_summary(state, store.read_events(prd, state_root),
