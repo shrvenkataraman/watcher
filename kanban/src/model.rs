@@ -119,3 +119,8 @@ pub fn parse(json: &str) -> Result<Board, String> {
         lanes,
     })
 }
+
+/// Red-commit stub. Ticket 04 replaces the body.
+pub fn merge(_boards: Vec<Board>) -> (Board, Vec<String>) {
+    unimplemented!("ticket 04")
+}
