@@ -57,7 +57,129 @@ def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
             return state, ()
         return _dispatch(marked)
 
+    if event.kind in ("implemented", "fixed") and not event.ok:
+        return _verify_failed(state, event)
+    if event.kind == "question":
+        return _park(state, event.key, "question", event.detail)
+    if event.kind == "timeout":
+        return _park(state, event.key, "stalled")
+    if event.kind == "bad_verdict":
+        return _park(state, event.key, "bad_verdict")
+    if event.kind == "model_failed":
+        return _model_failed(state, event)
+    if event.kind == "phase_timeout":
+        return _park_running(state)
+    if event.kind in ("answered", "retry"):
+        return _user_release(state, event)
+    if event.kind == "skip":
+        return _skip(state, event)
+    if event.kind == "abort":
+        return replace(state, phase="done"), (Action("write_summary"),)
+
     return state, ()
+
+
+def _locate(
+    state: State, key: str, status: str | None = None
+) -> tuple[int, TicketState] | None:
+    """First lane index and ticket that carry this key, with this status if given."""
+    for i, lane in enumerate(state.lanes):
+        for ticket in lane.tickets:
+            if ticket.key == key and (status is None or ticket.status == status):
+                return i, ticket
+    return None
+
+
+def _place(state: State, i: int, ticket: TicketState, busy: bool = False) -> State:
+    """This lane carries `ticket`; the lane goes idle unless `busy`."""
+    lanes = list(state.lanes)
+    lanes[i] = replace(lanes[i], busy=busy, tickets=tuple(
+        ticket if t.key == ticket.key else t for t in lanes[i].tickets))
+    return replace(state, lanes=tuple(lanes))
+
+
+def _drop_needs(state: State, key: str) -> State:
+    """Drop every needs_you entry that carries this key."""
+    return replace(state, needs_you=tuple(n for n in state.needs_you if n.key != key))
+
+
+def _park(
+    state: State, key: str, reason: str, detail: str = ""
+) -> tuple[State, tuple[Action, ...]]:
+    """Park a ticket as needs_you, notify once, then dispatch what lanes can take."""
+    found = _locate(state, key)
+    if found:
+        i, ticket = found
+        state = _place(state, i, replace(ticket, status="needs_you"))
+    state, actions = _dispatch(replace(
+        state, needs_you=state.needs_you + (NeedsYou(key, reason, detail),)))
+    return state, (Action("notify", key=key, detail=f"{reason}: {key}"),) + actions
+
+
+def _verify_failed(
+    state: State, event: Event
+) -> tuple[State, tuple[Action, ...]]:
+    """First verify failure retries with the failure tail, the second parks it."""
+    found = _locate(state, event.key, "running")
+    if not found:
+        return state, ()
+    i, ticket = found
+    failed = replace(ticket, verify_fails=ticket.verify_fails + 1)
+    if failed.verify_fails > 1:
+        return _park(_place(state, i, failed), event.key, "verify_failed_twice")
+    retried = replace(failed, status="changes" if failed.findings else "pending")
+    state, actions = _dispatch(_place(state, i, retried))
+    return state, tuple(
+        replace(a, detail=event.detail) if a.key == event.key else a for a in actions)
+
+
+def _model_failed(
+    state: State, event: Event
+) -> tuple[State, tuple[Action, ...]]:
+    """Retry a model load once, then park `model` for a human."""
+    state = replace(state, load_tries=state.load_tries + 1)
+    if state.load_tries == 1:
+        return state, (Action("load_model", model=PHASE_MODEL.get(state.phase)),)
+    entry = NeedsYou("model", "model_failed", event.detail)
+    return replace(state, needs_you=state.needs_you + (entry,)), (
+        Action("notify", key=entry.key, detail=f"{entry.reason}: {entry.key}"),)
+
+
+def _park_running(state: State) -> tuple[State, tuple[Action, ...]]:
+    """Park every still-running ticket as stalled."""
+    actions: list[Action] = []
+    for lane in state.lanes:
+        for ticket in lane.tickets:
+            if ticket.status == "running":
+                state, parked = _park(state, ticket.key, "stalled")
+                actions.extend(parked)
+    return state, tuple(actions)
+
+
+def _user_release(
+    state: State, event: Event
+) -> tuple[State, tuple[Action, ...]]:
+    """answered and retry requeue a parked ticket; retry model reloads the model."""
+    if event.kind == "retry" and event.key == "model":
+        state = replace(_drop_needs(state, "model"), load_tries=0)
+        return state, (Action("load_model", model=PHASE_MODEL.get(state.phase)),)
+    found = _locate(state, event.key, "needs_you") or _locate(state, event.key)
+    if found:
+        i, ticket = found
+        reopened = replace(
+            ticket, verify_fails=0,
+            status="changes" if ticket.findings else "pending")
+        state = _place(state, i, reopened)
+    return _dispatch(_drop_needs(state, event.key))
+
+
+def _skip(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
+    """Mark a parked ticket skipped, drop its entries, dispatch what is left."""
+    found = _locate(state, event.key)
+    if found:
+        i, ticket = found
+        state = _place(state, i, replace(ticket, status="skipped"))
+    return _dispatch(_drop_needs(state, event.key))
 
 
 def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
