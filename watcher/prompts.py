@@ -33,7 +33,7 @@ TASK: dict[str, str] = {
 RULES_HEADER = "## Rules"
 # The same three sentences carry every role that edits files.
 EDIT_RULE = (
-    "Edit only files in the ticket's Edit line. Do not commit. If you cannot "
+    "Edit only files in the ticket's Edit line. Do not edit .agent/ except .agent/question.md. Do not commit. If you cannot "
     "proceed without a decision, write the question to .agent/question.md and stop."
 )
 FIX_RULE = f"{EDIT_RULE} Fix only these findings."

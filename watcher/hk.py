@@ -74,3 +74,23 @@ def verify(worktree: str, timeout: float = 1200) -> VerifyResult:
     if green:
         return VerifyResult(green=True, tail="")
     return VerifyResult(green=False, tail=_joined_output_tail(receipt.get("checks", [])))
+
+
+@dataclass(frozen=True)
+class ReviewResult:
+    approved: bool
+    tail: str
+
+
+def review(worktree: str, timeout: float = 1800) -> ReviewResult:
+    """Run `hk review`; the pre-commit hook needs an APPROVED review of this diff."""
+    proc = subprocess.run([HK, "review"], cwd=worktree, capture_output=True,
+                          text=True, timeout=timeout)
+    path = os.path.join(worktree, ".agent", "review.json")
+    if not os.path.exists(path):
+        return ReviewResult(approved=False, tail=_tail(proc.stderr))
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if data.get("status") == "APPROVED":
+        return ReviewResult(approved=True, tail="")
+    return ReviewResult(approved=False, tail=_tail(str(data.get("notes_tail", ""))))

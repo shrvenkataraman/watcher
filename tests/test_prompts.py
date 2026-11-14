@@ -31,7 +31,7 @@ def test_AC1_implement_file_task_and_sections(tmp_path):
     assert text.startswith("# Role: implement")
     assert "## Ticket" in text and "TICKET BODY" in text
     assert "## Previous failure" in text and "FAILED test_x" in text
-    assert "Edit only files in the ticket's Edit line. Do not commit." in text
+    assert "Edit only files in the ticket's Edit line. Do not edit .agent/ except .agent/question.md. Do not commit." in text
     assert "## Findings" not in text and "## Commit" not in text
 
 

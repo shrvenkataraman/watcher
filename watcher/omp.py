@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TOOLS = {
-    "implement": "read,edit,write,bash,grep,find,ls",
-    "fix": "read,edit,write,bash,grep,find,ls",
-    "review": "read,grep,find,ls",
-    "pr_review": "read,grep,find,ls",
-    "pr_fix": "read,edit,write,bash,grep,find,ls",
+    "implement": "read,edit,write,bash,grep,glob",
+    "fix": "read,edit,write,bash,grep,glob",
+    "review": "read,grep,glob,write",
+    "pr_review": "read,grep,glob,write",
+    "pr_fix": "read,edit,write,bash,grep,glob",
 }
 THINKING = {
     "implement": "low",

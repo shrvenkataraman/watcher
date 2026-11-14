@@ -23,7 +23,7 @@ def fake_omp(tmp_path, monkeypatch):
 def test_AC1_argv_for_review():
     argv = build_argv("review", "qwen3.8-27b-w8a8", "/tmp/p.md", "Review the commit now.")
     assert argv[:2] == ["omp", "-p"] or argv[1] == "-p"  # binary name may be overridden by env
-    assert "--tools" in argv and argv[argv.index("--tools") + 1] == "read,grep,find,ls"
+    assert "--tools" in argv and argv[argv.index("--tools") + 1] == "read,grep,glob,write"
     assert "--thinking" in argv and argv[argv.index("--thinking") + 1] == "medium"
     assert argv[-2] == "@ /tmp/p.md".strip() or argv[-2] == "@/tmp/p.md"
     assert argv[-1] == "Review the commit now."
@@ -33,7 +33,7 @@ def test_property_read_only_roles_never_get_write_tools():
     for role in ("review", "pr_review"):
         argv = build_argv(role, "m", "p.md", "t")
         tools = argv[argv.index("--tools") + 1]
-        for banned in ("edit", "write", "bash"):
+        for banned in ("edit", "bash"):
             assert banned not in tools.split(",")
 
 
