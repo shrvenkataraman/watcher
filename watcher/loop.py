@@ -137,7 +137,8 @@ def tick(prd: str, inbox: str, root: str, state_root: str | None = None,
         else:
             state = saved
         ctx = executor.Ctx(plan=plan, root=root, check=checks,
-                           prompt_dir=os.path.join(directory, "prompts"), adapters=adapters)
+                           prompt_dir=os.path.join(directory, "prompts"), adapters=adapters,
+                           templates=cfg.prompt_dir)
         # One `start` per process, and again only after something else happened,
         # so an idle run waiting on the user does not grow the event log.
         events = store.read_events(prd, state_root)
