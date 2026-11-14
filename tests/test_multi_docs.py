@@ -23,3 +23,11 @@ def test_AC3_lease_dir():
 
 def test_AC1_property_heading_once():
     assert _text().count("## Several projects at once") == 1
+
+
+def test_AC4_existing_docs_tests_still_pass():
+    import subprocess, sys
+    root = README.parent
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/test_docs.py"],
+                       cwd=root, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout[-400:]
