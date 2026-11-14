@@ -13,6 +13,7 @@ import sys
 from typing import Callable
 
 from . import loop, newinbox, store, tui
+from .config import load_config
 from .status import render_text, status_doc
 from .types import Event, NeedsYou, State, TicketState, to_json
 
@@ -136,6 +137,7 @@ def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--prd", default=None, help="prd name (default: the only one)")
     common.add_argument("--state-root", default=None, help="state root holding watcher/")
+    common.add_argument("--config", default=None, help="watcher.toml path (default: $WATCHER_CONFIG or ~/.config/watcher/watcher.toml)")
     sub = parser.add_subparsers(dest="command", required=True)
     new = sub.add_parser("new", help="build an inbox from a ticket bundle")
     new.add_argument("--from", dest="bundle", required=True, help="bundle directory")
@@ -190,9 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in ("run", "tick"):  # these two step the pipeline; the rest read it
         if args.prd is None:
             return _fail("--prd is required for run and tick")
+        cfg = load_config(args.config)
         if args.command == "run":
-            return loop.run(args.prd, args.inbox, WORK_ROOT, state_root=args.state_root)
-        loop.tick(args.prd, args.inbox, WORK_ROOT, state_root=args.state_root)
+            return loop.run(args.prd, args.inbox, WORK_ROOT, state_root=args.state_root, cfg=cfg)
+        loop.tick(args.prd, args.inbox, WORK_ROOT, state_root=args.state_root, cfg=cfg)
         return EXIT_OK
     state, code = _load(args)
     return code if state is None else _COMMANDS[args.command](state, args)
