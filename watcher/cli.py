@@ -1,4 +1,4 @@
-"""CLI: watcher status|inbox|show|answer|retry|skip|abort|run|tick|tui (tickets 19, 22, 25).
+"""CLI: watcher status|inbox|show|answer|retry|skip|abort|run|tick|tui|prds (tickets 19, 22, 25, 03).
 
 Commands read state.json and never write it. User input appends one Event line to queue.jsonl.
 """
@@ -102,6 +102,12 @@ def _cmd_show(state: State, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_prds(args: argparse.Namespace) -> int:
+    """Print every project that has state as one JSON line; never read --prd."""
+    print(json.dumps({"schema": 1, "prds": store.list_prds(args.state_root)}))
+    return EXIT_OK
+
+
 def _key_command(kind: str, answer: bool = False) -> Callable:
     """Build a command that queues this event kind for a key the state already knows."""
 
@@ -154,6 +160,7 @@ def _parser() -> argparse.ArgumentParser:
         ("run", "tick until the run is done", ""), ("tick", "advance one round", ""),
         ("tui", "open the terminal UI", ""),
         ("board", "open the kanban board", ""),
+        ("prds", "list the projects that have state", ""),
     ):
         child = sub.add_parser(name, parents=[common], help=help_text)
         for arg in keys.split():
@@ -177,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fail(str(err))
         print(path)
         return EXIT_OK
+    if args.command == "prds":
+        return _cmd_prds(args)
     if args.command == "tui":
         prd, message = _resolve_prd(args.prd, args.state_root)
         return _fail(message) if prd is None else tui.main(prd)

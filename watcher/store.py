@@ -25,6 +25,18 @@ def state_dir(prd: str, root: str | None = None) -> str:
     return os.path.join(root if root is not None else _default_root(), "watcher", prd)
 
 
+def list_prds(root: str | None = None) -> list[str]:
+    """Return the sorted names of the folders under the state root that hold a state.json."""
+    parent = os.path.dirname(state_dir("", root))
+    if not os.path.isdir(parent):
+        return []
+    return sorted(
+        name
+        for name in os.listdir(parent)
+        if os.path.isfile(os.path.join(state_dir(name, root), STATE_FILE))
+    )
+
+
 def _fsync_dir(path: str) -> None:
     """Fsync a directory so the rename inside it survives a crash."""
     fd = os.open(path, os.O_RDONLY)

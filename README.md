@@ -53,6 +53,7 @@ cargo install --path kanban
 
    ```
    watcher status --prd myprd
+   watcher prds
    watcher board --prd myprd
    ```
 
