@@ -6,6 +6,7 @@ Frozen dataclasses for state, events and actions, plus JSON round-trip helpers.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
+from enum import StrEnum
 from typing import Any
 
 PHASE_MODEL = {
@@ -15,16 +16,27 @@ PHASE_MODEL = {
     "done": None,
 }
 
-TICKET_STATUSES = (
-    "pending",
-    "running",
-    "implemented",
-    "approved",
-    "changes",
-    "fixed",
-    "needs_you",
-    "skipped",
-)
+
+
+class Phase(StrEnum):
+    FLASH = "flash"
+    REVIEW = "review"
+    PR = "pr"
+    DONE = "done"
+
+
+class TicketStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    IMPLEMENTED = "implemented"
+    APPROVED = "approved"
+    CHANGES = "changes"
+    FIXED = "fixed"
+    NEEDS_YOU = "needs_you"
+    SKIPPED = "skipped"
+
+
+TICKET_STATUSES = tuple(s.value for s in TicketStatus)
 
 
 @dataclass(frozen=True)
@@ -119,7 +131,14 @@ def state_from_json(d: dict) -> State:
         lanes.append(_build(Lane, {**lane, "tickets": tickets}))
     needs_you = [_build(NeedsYou, item) for item in d.get("needs_you", ())]
     models = [tuple(m) for m in d.get("models", ())]
-    return _build(State, {**d, "lanes": lanes, "needs_you": needs_you, "models": models})
+    state = _build(State, {**d, "lanes": lanes, "needs_you": needs_you, "models": models})
+    if state.phase not in {p.value for p in Phase}:
+        raise ValueError(f"unknown phase: {state.phase}")
+    for lane in state.lanes:
+        for ticket in lane.tickets:
+            if ticket.status not in TICKET_STATUSES:
+                raise ValueError(f"unknown status: {ticket.status} ({ticket.key})")
+    return state
 
 
 def event_from_json(d: dict) -> Event:
