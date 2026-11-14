@@ -1,4 +1,4 @@
-"""CLI: watcher status|inbox|show|answer|retry|skip|abort|run|tick (tickets 19, 22).
+"""CLI: watcher status|inbox|show|answer|retry|skip|abort|run|tick|tui (tickets 19, 22, 25).
 
 Commands read state.json and never write it. User input appends one Event line to queue.jsonl.
 """
@@ -11,12 +11,13 @@ import os
 import sys
 from typing import Callable
 
-from . import loop, store
+from . import loop, store, tui
 from .status import render_text, status_doc
 from .types import Event, NeedsYou, State, TicketState, to_json
 
 EXIT_OK, EXIT_USAGE, EXIT_NEEDS_YOU = 0, 2, 3
 DETAIL_CHARS = 60
+PROG = "watcher"
 KEY_HELP = "ticket key, for example quark-kit/07"
 WORK_ROOT = os.environ.get("WATCHER_WORK", os.path.expanduser("~/Work"))
 
@@ -122,9 +123,14 @@ _COMMANDS: dict[str, Callable] = {
 }
 
 
+def _strip_prog(argv: list[str] | None) -> list[str] | None:
+    """Return argv without its leading program name, which some callers include."""
+    return argv[1:] if argv and argv[0] == PROG else argv
+
+
 def _parser() -> argparse.ArgumentParser:
     """Build the parser: one subcommand, each taking --prd and --state-root."""
-    parser = argparse.ArgumentParser(prog="watcher")
+    parser = argparse.ArgumentParser(prog=PROG)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--prd", default=None, help="prd name (default: the only one)")
     common.add_argument("--state-root", default=None, help="state root holding watcher/")
@@ -135,6 +141,7 @@ def _parser() -> argparse.ArgumentParser:
         ("skip", "skip one ticket", "key"), ("answer", "answer one question", "key text"),
         ("abort", "abort the run", ""),
         ("run", "tick until the run is done", ""), ("tick", "advance one round", ""),
+        ("tui", "open the terminal UI", ""),
     ):
         child = sub.add_parser(name, parents=[common], help=help_text)
         for arg in keys.split():
@@ -148,7 +155,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run one CLI command and return its exit code."""
-    args = _parser().parse_args(argv)
+    args = _parser().parse_args(_strip_prog(argv))
+    if args.command == "tui":
+        prd, message = _resolve_prd(args.prd, args.state_root)
+        return _fail(message) if prd is None else tui.main(prd)
     if args.command in ("run", "tick"):  # these two step the pipeline; the rest read it
         if args.prd is None:
             return _fail("--prd is required for run and tick")
