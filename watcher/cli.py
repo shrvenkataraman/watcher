@@ -165,6 +165,8 @@ def _parser() -> argparse.ArgumentParser:
         child = sub.add_parser(name, parents=[common], help=help_text)
         for arg in keys.split():
             child.add_argument(arg, help=KEY_HELP if arg == "key" else "the answer text")
+        if name == "board":
+            child.add_argument("--all", action="store_true", help="show every project")
         if name == "status":
             child.add_argument("--json", action="store_true", help="print the status JSON")
         if name in ("run", "tick"):
@@ -190,13 +192,19 @@ def main(argv: list[str] | None = None) -> int:
         prd, message = _resolve_prd(args.prd, args.state_root)
         return _fail(message) if prd is None else tui.main(prd)
     if args.command == "board":
-        prd, message = _resolve_prd(args.prd, args.state_root)
-        if prd is None:
-            return _fail(message)
+        if args.all and args.prd:
+            return _fail("watcher board: use --prd or --all, not both")
+        if args.all:
+            prd_args = ["--all"]
+        else:
+            prd, message = _resolve_prd(args.prd, args.state_root)
+            if prd is None:
+                return _fail(message)
+            prd_args = ["--prd", prd]
         if shutil.which(BOARD_BIN) is None:
             return _fail("watcher board: install the board with `cargo install --path kanban`")
         extra = ["--state-root", args.state_root] if args.state_root else []
-        os.execvp(BOARD_BIN, [BOARD_BIN, "--prd", prd, *extra])
+        os.execvp(BOARD_BIN, [BOARD_BIN, *prd_args, *extra])
         return EXIT_OK
     if args.command in ("run", "tick"):  # these two step the pipeline; the rest read it
         if args.prd is None:
