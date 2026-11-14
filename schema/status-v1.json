@@ -43,6 +43,7 @@
               "required": ["key", "status", "sha", "depends_on", "verify_fails", "fix_rounds"],
               "properties": {
                 "key": {"type": "string"},
+                "title": {"type": "string"},
                 "status": {"type": "string"},
                 "sha": {"type": ["string", "null"]},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
