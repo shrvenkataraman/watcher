@@ -95,7 +95,7 @@ def test_AC5_tickets_beyond_the_current_batch_are_never_dispatched():
 
 def test_unknown_event_kind_is_a_no_op():
     s = _state((Lane("quark-kit", _tickets(("quark-kit/01", 0))),))
-    new, actions = step(s, Event("question", key="quark-kit/01"))
+    new, actions = step(s, Event("nonsense", key="quark-kit/01"))
     assert new == s and actions == ()
 
 

@@ -102,6 +102,41 @@ def _next_phase(state, actions):
     return actions
 
 
+def _find(state, key, status="running"):
+    for lane in state["lanes"]:
+        for t in lane["tickets"]:
+            if t["key"] == key and (status is None or t["status"] == status):
+                return lane, t
+    return None, None
+
+
+def _park(state, key, reason, detail=""):
+    for lane in state["lanes"]:
+        for t in lane["tickets"]:
+            if t["key"] == key:
+                t["status"] = "needs_you"
+                lane["busy"] = False
+    state["needs_you"].append({"key": key, "reason": reason, "detail": detail})
+    actions = [{"kind": "notify", "key": key, "model": "", "detail": f"{reason}: {key}"}]
+    actions.extend(_dispatch(state))
+    return actions
+
+
+def _remove_needs(state, key):
+    state["needs_you"] = [n for n in state["needs_you"] if n["key"] != key]
+
+
+def _release(state, key):
+    lane, t = _find(state, key, "needs_you")
+    if t is None:
+        lane, t = _find(state, key)
+    if t is not None:
+        t["status"] = "changes" if t["findings"] else "pending"
+        t["verify_fails"] = 0
+        lane["busy"] = False
+    _remove_needs(state, key)
+
+
 def ref_step(state, event):
     """Apply one event to a deep copy of `state`; return (new_state, actions)."""
     s = copy.deepcopy(state)
@@ -112,7 +147,8 @@ def ref_step(state, event):
         if s["model"] != expected:
             s["model"] = ""
             return s, [_load_action(s["phase"])]
-        return s, []
+        s["load_tries"] = 0
+        return s, _dispatch(s)
 
     if kind == "model_ready":
         if event.get("detail") != expected:
@@ -142,6 +178,70 @@ def ref_step(state, event):
             ticket["status"] = "changes"
             ticket["findings"] = event.get("detail", "")
         return s, _dispatch(s)
+
+    if kind in ("implemented", "fixed") and not event.get("ok", True):
+        lane, ticket = _find(s, event["key"])
+        if ticket is None:
+            return s, []
+        ticket["verify_fails"] += 1
+        if ticket["verify_fails"] == 1:
+            ticket["status"] = "changes" if ticket["findings"] else "pending"
+            lane["busy"] = False
+            actions = _dispatch(s)
+            for a in actions:
+                if a["key"] == event["key"]:
+                    a["detail"] = event.get("detail", "")
+            return s, actions
+        return s, _park(s, event["key"], "verify_failed_twice")
+
+    if kind == "question":
+        return s, _park(s, event["key"], "question", event.get("detail", ""))
+
+    if kind == "timeout":
+        return s, _park(s, event["key"], "stalled")
+
+    if kind == "bad_verdict":
+        return s, _park(s, event["key"], "bad_verdict")
+
+    if kind == "model_failed":
+        s["load_tries"] += 1
+        if s["load_tries"] == 1:
+            return s, [_load_action(s["phase"])]
+        s["needs_you"].append({"key": "model", "reason": "model_failed",
+                               "detail": event.get("detail", "")})
+        return s, [{"kind": "notify", "key": "model", "model": "",
+                    "detail": "model_failed: model"}]
+
+    if kind == "phase_timeout":
+        running = [t["key"] for lane in s["lanes"] for t in lane["tickets"] if t["status"] == "running"]
+        actions = []
+        for key in running:
+            actions.extend(_park(s, key, "stalled"))
+        return s, actions
+
+    if kind == "answered":
+        _release(s, event["key"])
+        return s, _dispatch(s)
+
+    if kind == "retry":
+        if event["key"] == "model":
+            _remove_needs(s, "model")
+            s["load_tries"] = 0
+            return s, [_load_action(s["phase"])]
+        _release(s, event["key"])
+        return s, _dispatch(s)
+
+    if kind == "skip":
+        lane, ticket = _find(s, event["key"], None)
+        if ticket is not None:
+            ticket["status"] = "skipped"
+            lane["busy"] = False
+        _remove_needs(s, event["key"])
+        return s, _dispatch(s)
+
+    if kind == "abort":
+        s["phase"] = "done"
+        return s, [{"kind": "write_summary", "key": "", "model": "", "detail": ""}]
 
     if kind == "fixed" and event.get("ok", True):
         target = None
