@@ -1,0 +1,17 @@
+#!/bin/bash
+# Fake gh: appends its argv to $GH_LOG; behaviour driven by env.
+echo "$*" >> "$GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  if [ -n "${GH_FAIL_EXIST:-}" -o -n "${GH_EXISTS:-}" ]; then
+    echo "could not create pull request: a pull request already exists" >&2
+    exit 1
+  fi
+  echo "https://example.test/pull/1"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo "https://example.test/pull/2"
+  exit 0
+fi
+echo "fake gh: unexpected args: $*" >&2
+exit 2
