@@ -64,6 +64,7 @@ class State:
     lanes: tuple[Lane, ...] = ()
     needs_you: tuple[NeedsYou, ...] = ()
     load_tries: int = 0
+    models: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,8 @@ def state_from_json(d: dict) -> State:
         tickets = [_build(TicketState, ticket) for ticket in lane.get("tickets", ())]
         lanes.append(_build(Lane, {**lane, "tickets": tickets}))
     needs_you = [_build(NeedsYou, item) for item in d.get("needs_you", ())]
-    return _build(State, {**d, "lanes": lanes, "needs_you": needs_you})
+    models = [tuple(m) for m in d.get("models", ())]
+    return _build(State, {**d, "lanes": lanes, "needs_you": needs_you, "models": models})
 
 
 def event_from_json(d: dict) -> Event:
