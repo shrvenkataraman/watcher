@@ -41,6 +41,7 @@ class Ctx:
     prompt_dir: str
     check: dict[str, str]
     adapters: Adapters = field(default_factory=default_adapters)
+    templates: str = ""
 
 
 def execute(action: Action, ctx: Ctx) -> Event | None:
@@ -61,7 +62,8 @@ def _worktree(ctx: Ctx, key: str) -> str:
 def _run(action: Action, ctx: Ctx, wt: str, role: str, fail_kind: str = "",
          **inputs) -> Event | None:
     """Prompt, run omp once; return the question, timeout or error event, else None."""
-    path, task = prompts.write_prompt(role, ctx.prompt_dir, key=action.key, **inputs)
+    path, task = prompts.write_prompt(role, ctx.prompt_dir, key=action.key,
+                                       templates=ctx.templates, **inputs)
     result = ctx.adapters.agent.run(role, action.model, wt, path, task)
     if result.outcome == "error" and fail_kind:
         return Event(fail_kind, key=action.key, ok=False, detail="omp error: " + result.detail)
