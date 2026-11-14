@@ -154,3 +154,14 @@ class DependsMachine(RuleBasedStateMachine):
 
 TestDepends = DependsMachine.TestCase
 TestDepends.settings = settings(max_examples=40, stateful_step_count=12, deadline=None)
+
+
+def test_dependency_approved_in_review_goes_back_to_flash_not_pr():
+    from watcher.core import step
+    from watcher.types import Event, Lane, State, TicketState
+    lane = Lane("a", (TicketState("a/01", 0, status="running", sha="s1"),
+                      TicketState("a/02", 0, depends_on=("a/01",))), busy=True)
+    s = State(prd="d", phase="review", model="qwen3.8-27b-w8a8", lanes=(lane,))
+    new, actions = step(s, Event("reviewed", key="a/01", ok=True, detail="[]"))
+    assert new.phase == "flash"
+    assert [a.model for a in actions if a.kind == "load_model"] == ["qwen3.8-flash-next"]

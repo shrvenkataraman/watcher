@@ -64,6 +64,7 @@ def _finished(lane):
 def _dispatch(state):
     actions = _block_check(state)
     if state["phase"] == "pr":
+        dispatched = False
         for lane in state["lanes"]:
             if lane["busy"] or lane["pr_status"] != "none" or not _finished(lane):
                 continue
@@ -71,6 +72,22 @@ def _dispatch(state):
             lane["pr_status"] = "running"
             actions.append({"kind": "pr_review", "key": lane["repo"],
                             "model": PHASE_MODEL["pr"], "detail": ""})
+            dispatched = True
+        if dispatched or any(lane["busy"] for lane in state["lanes"]):
+            return actions
+        open_work = any(ready_tickets(state, lane) or any(
+            t["status"] in ("changes", "implemented", "fixed") for t in lane["tickets"])
+            for lane in state["lanes"])
+        if open_work:
+            back = "review" if any(t["status"] in ("implemented", "fixed")
+                                   for lane in state["lanes"] for t in lane["tickets"]) else "flash"
+            state["phase"] = back
+            state["model"] = ""
+            return actions + [_load_action(back)]
+        objected = any(lane["pr_status"].startswith("objected:") for lane in state["lanes"])
+        parked = any(t["status"] == "needs_you" for lane in state["lanes"] for t in lane["tickets"])
+        if objected or not parked:
+            return _pr_phase_end(state, actions)
         return actions
     if state["phase"] == "review":
         return actions + _dispatch_review(state)
@@ -157,7 +174,8 @@ def _next_phase(state, actions):
     batches = [t["batch"] for lane in state["lanes"] for t in lane["tickets"]]
     more = ("changes" in statuses) or any(
         t["status"] == "pending" and t["batch"] == state["batch"] + 1
-        for lane in state["lanes"] for t in lane["tickets"])
+        for lane in state["lanes"] for t in lane["tickets"]) or any(
+        ready_tickets(state, lane) for lane in state["lanes"])
     if more:
         state["phase"] = "flash"
         if not any(t["status"] in ("pending", "running") and t["batch"] == state["batch"]
@@ -218,6 +236,7 @@ def ref_step(state, event):
             s["model"] = ""
             return s, [_load_action(s["phase"])]
         s["load_tries"] = 0
+        s["needs_you"] = [n for n in s["needs_you"] if n["key"] != "model"]
         return s, _dispatch(s)
 
     if kind == "model_ready":
@@ -226,6 +245,7 @@ def ref_step(state, event):
             return s, [_load_action(s["phase"])]
         s["model"] = event["detail"]
         s["load_tries"] = 0
+        s["needs_you"] = [n for n in s["needs_you"] if n["key"] != "model"]
         return s, _dispatch(s)
 
     if kind == "pr_reviewed":
@@ -309,7 +329,7 @@ def ref_step(state, event):
 
     if kind == "model_failed":
         s["load_tries"] += 1
-        if s["load_tries"] == 1:
+        if s["load_tries"] < 3:
             return s, [_load_action(s["phase"])]
         s["needs_you"].append({"key": "model", "reason": "model_failed",
                                "detail": event.get("detail", "")})

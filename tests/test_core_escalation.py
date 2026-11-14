@@ -75,11 +75,13 @@ def test_AC2_park_events_give_matching_reason_and_one_notify():
         assert notifies[0].detail == f"{reason}: a/01"
 
 
-def test_AC3_model_failed_retries_once_then_parks_model():
+def test_AC3_model_failed_retries_twice_then_parks_model():
     s = _state(_two_lanes())
     new, actions = step(s, Event("model_failed", detail="502"))
     assert actions == (Action("load_model", model=FLASH),)
     assert new.load_tries == 1 and new.needs_you == ()
+    new, actions = step(new, Event("model_failed", detail="502"))
+    assert actions == (Action("load_model", model=FLASH),) and new.needs_you == ()
     new2, actions2 = step(new, Event("model_failed", detail="502"))
     assert [(n.key, n.reason) for n in new2.needs_you] == [("model", "model_failed")]
     assert [a.kind for a in actions2] == ["notify"]

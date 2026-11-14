@@ -50,6 +50,9 @@ def finished(lane: Lane) -> bool:
     return all(t.status in ("approved", "skipped") for t in lane.tickets)
 
 
+LOAD_TRIES = 3  # a Flash-Next start can fail while RAM frees up after a swap
+
+
 def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     """Return the next state and the actions for one event."""
     wanted = PHASE_MODEL.get(state.phase)
@@ -60,7 +63,8 @@ def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
         have = state.model if event.kind == "start" else event.detail
         if have != wanted:
             return replace(state, model=""), (Action("load_model", model=wanted),)
-        return _dispatch(replace(state, model=wanted, load_tries=0))
+        cleared = tuple(n for n in state.needs_you if n.key != "model")
+        return _dispatch(replace(state, model=wanted, load_tries=0, needs_you=cleared))
 
     if event.kind == "implemented" and event.ok:
         return _dispatch(_mark_implemented(state, event))
@@ -173,9 +177,9 @@ def _verify_failed(
 def _model_failed(
     state: State, event: Event
 ) -> tuple[State, tuple[Action, ...]]:
-    """Retry a model load once, then park `model` for a human."""
+    """Retry a model load twice, then park `model` for a human."""
     state = replace(state, load_tries=state.load_tries + 1)
-    if state.load_tries == 1:
+    if state.load_tries < LOAD_TRIES:
         return state, (Action("load_model", model=PHASE_MODEL.get(state.phase)),)
     entry = NeedsYou("model", "model_failed", event.detail)
     return replace(state, needs_you=state.needs_you + (entry,)), (
@@ -349,7 +353,34 @@ def _dispatch_pr(
         pr_actions.append(Action("pr_review", key=lane.repo, model=PHASE_MODEL["pr"]))
         lanes.append(replace(lane, busy=True, pr_status="running"))
 
-    return replace(state, lanes=tuple(lanes)), tuple(pr_actions)
+    state = replace(state, lanes=tuple(lanes))
+    if len(pr_actions) > len(actions) or any(lane.busy for lane in state.lanes):
+        return state, tuple(pr_actions)
+    # Nothing to review: released tickets send the run back, else close the round.
+    if _open_ticket_work(state):
+        return _back_to_work(state, tuple(pr_actions))
+    objected = any(lane.pr_status.startswith(OBJECTION_PREFIX) for lane in state.lanes)
+    parked = any(t.status == "needs_you" for lane in state.lanes for t in lane.tickets)
+    if objected or not parked:
+        return _pr_phase_end(state, tuple(pr_actions))
+    return state, tuple(pr_actions)  # only parked work left: wait for the user
+
+
+def _open_ticket_work(state: State) -> bool:
+    """Work the run can do now: ready pending tickets, or changes/implemented/fixed ones."""
+    return any(
+        ready_tickets(state, lane)
+        or any(t.status in ("changes", "implemented", "fixed") for t in lane.tickets)
+        for lane in state.lanes)
+
+
+def _back_to_work(state: State, actions: tuple[Action, ...]) -> tuple[State, tuple[Action, ...]]:
+    """A ticket released in the pr phase goes back through review or flash."""
+    if any(t.status in ("implemented", "fixed") for lane in state.lanes for t in lane.tickets):
+        return replace(state, phase="review", model=""), actions + (
+            Action("load_model", model=PHASE_MODEL["review"]),)
+    return replace(state, phase="flash", model=""), actions + (
+        Action("load_model", model=PHASE_MODEL["flash"]),)
 
 
 def _pr_phase_end(
@@ -474,7 +505,8 @@ def _next_phase(state: State) -> tuple[State, tuple[Action, ...]]:
         for lane in state.lanes
         for ticket in lane.tickets
     )
-    if not changes and not next_batch_pending:
+    ready_now = any(ready_tickets(state, lane) for lane in state.lanes)
+    if not changes and not next_batch_pending and not ready_now:
         return replace(state, phase="pr", model=""), (
             Action("load_model", model=PHASE_MODEL["pr"]),
         )
