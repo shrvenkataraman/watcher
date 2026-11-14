@@ -61,17 +61,21 @@ def _nn(key: str) -> str:
     return key.rsplit("/", 1)[-1]
 
 
-def _rules(role: str, *, commit: str, nn: str) -> str:
-    """Return the rule text for one role."""
-    if role in ("fix", "pr_fix"):
-        return FIX_RULE
+TEMPLATES = os.path.join(os.path.dirname(__file__), "templates")
+
+
+def _rules(role: str, *, commit: str, nn: str, templates: str = "") -> str:
+    """Return the rule text for one role from a template file."""
+    path = os.path.join(templates, role + ".md") if templates else ""
+    if not (path and os.path.isfile(path)):
+        path = os.path.join(TEMPLATES, role + ".md")
+    with open(path, encoding="utf-8", newline="") as handle:
+        text = handle.read()
+    if text.endswith("\n"):
+        text = text[:-1]
     if role == "review":
-        return REVIEW_RULE.format(
-            commit=commit, verdict_file=VERDICT_FILE.format(nn=nn)
-        )
-    if role == "pr_review":
-        return READ_RULE
-    return EDIT_RULE
+        return text.format(commit=commit, verdict_file=VERDICT_FILE.format(nn=nn))
+    return text
 
 
 def write_prompt(
@@ -86,6 +90,7 @@ def write_prompt(
     diff: str = "",
     verdicts: str = "",
     key: str = "",
+    templates: str = "",
 ) -> tuple[str, str]:
     """Write the prompt file for one run; return (path, task)."""
     try:
@@ -110,7 +115,7 @@ def write_prompt(
         body = _read(given) if name in FILE_INPUTS else given
         if body:
             parts.append(f"{heading}\n{body.strip()}")
-    parts.append(f"{RULES_HEADER}\n{_rules(role, commit=commit, nn=_nn(key))}")
+    parts.append(f"{RULES_HEADER}\n{_rules(role, commit=commit, nn=_nn(key), templates=templates)}")
 
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{role}-{key.replace('/', '_')}.md")
