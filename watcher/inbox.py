@@ -32,6 +32,13 @@ def _key(repo: str, nn: str | int) -> str:
     return f"{repo}/{int(nn):02d}"
 
 
+def _title(path: str) -> str:
+    """'/x/03-prds-command.md' -> 'prds-command'. No leading 'NN-' -> the whole stem."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    head, sep, rest = stem.partition("-")
+    return rest if sep and head.isdigit() else stem
+
+
 def _read_manifest(root: str) -> dict:
     path = os.path.join(root, MANIFEST_FILE)
     if not os.path.isfile(path):
@@ -133,7 +140,10 @@ def load_inbox(path: str) -> Plan:
             repo=repo,
             tickets=tuple(
                 TicketState(
-                    key=key, batch=batch, depends_on=tuple(sorted(edges.get(key, ())))
+                    key=key,
+                    batch=batch,
+                    depends_on=tuple(sorted(edges.get(key, ()))),
+                    title=_title(files[key]),
                 )
                 for key, batch in ordered[repo]
             ),

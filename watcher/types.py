@@ -49,6 +49,7 @@ class TicketState:
     verify_fails: int = 0
     fix_rounds: int = 0
     findings: str = ""
+    title: str = ""
 
 
 @dataclass(frozen=True)
