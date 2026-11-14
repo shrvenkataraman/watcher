@@ -11,10 +11,12 @@ import pathlib
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from watcher import gitops, hk, llm, omp, prompts, verdict
+from watcher import gitops, prompts, verdict
+from watcher.adapters import default_adapters
 from watcher.inbox import Plan
+from watcher.ports import Adapters
 from watcher.types import Action, Event
 
 # Tickets 20 and 21 report notify, open_pr and write_summary; this file reports none.
@@ -38,6 +40,7 @@ class Ctx:
     root: str
     prompt_dir: str
     check: dict[str, str]
+    adapters: Adapters = field(default_factory=default_adapters)
 
 
 def execute(action: Action, ctx: Ctx) -> Event | None:
@@ -52,14 +55,14 @@ def execute(action: Action, ctx: Ctx) -> Event | None:
 
 def _worktree(ctx: Ctx, key: str) -> str:
     """The lane worktree that owns this key (`<repo>/<nn>` or `<repo>`)."""
-    return hk.lane_worktree(ctx.root, ctx.plan.state.prd, key.split("/", 1)[0])
+    return ctx.adapters.gate.lane_worktree(ctx.root, ctx.plan.state.prd, key.split("/", 1)[0])
 
 
 def _run(action: Action, ctx: Ctx, wt: str, role: str, fail_kind: str = "",
          **inputs) -> Event | None:
     """Prompt, run omp once; return the question, timeout or error event, else None."""
     path, task = prompts.write_prompt(role, ctx.prompt_dir, key=action.key, **inputs)
-    result = omp.run_omp(role, action.model, wt, path, task)
+    result = ctx.adapters.agent.run(role, action.model, wt, path, task)
     if result.outcome == "error" and fail_kind:
         return Event(fail_kind, key=action.key, ok=False, detail="omp error: " + result.detail)
     if result.outcome not in STALLS:
@@ -84,7 +87,7 @@ def _parse(path: str, sha: str) -> verdict.Verdict:
 
 def _load_model(action: Action, ctx: Ctx) -> Event:
     """Point llama-swap at the model; report whether it answered."""
-    ready = llm.ensure_model(action.model)
+    ready = ctx.adapters.model_server.ensure_model(action.model)
     if not ready:  # give the host time to free RAM before the core asks again
         time.sleep(LOAD_RETRY_WAIT)
     return Event("model_ready" if ready else "model_failed", key=action.key,
@@ -138,11 +141,11 @@ def _edit(action: Action, ctx: Ctx) -> Event:
         return stalled
     if not _changed(wt):
         return Event(kind, key=key, ok=False, detail="noop: the worker changed no files")
-    checked = hk.verify(wt)
-    if not checked.green:
+    checked = ctx.adapters.gate.verify(wt)
+    if not checked.ok:
         return Event(kind, key=key, ok=False, detail=checked.tail)
-    reviewed = hk.review(wt)
-    if not reviewed.approved:
+    reviewed = ctx.adapters.gate.review(wt)
+    if not reviewed.ok:
         return Event(kind, key=key, ok=False, detail="hk review rejected: " + reviewed.tail)
     title = os.path.splitext(os.path.basename(ticket_file))[0] or key
     with gitops.worktree_lock(wt):
