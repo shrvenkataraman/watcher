@@ -57,14 +57,34 @@ def _block_check(state):
     return actions
 
 
+def _finished(lane):
+    return all(t["status"] in ("approved", "skipped") for t in lane["tickets"])
+
+
 def _dispatch(state):
     actions = _block_check(state)
+    if state["phase"] == "pr":
+        for lane in state["lanes"]:
+            if lane["busy"] or lane["pr_status"] != "none" or not _finished(lane):
+                continue
+            lane["busy"] = True
+            lane["pr_status"] = "running"
+            actions.append({"kind": "pr_review", "key": lane["repo"],
+                            "model": PHASE_MODEL["pr"], "detail": ""})
+        return actions
     if state["phase"] == "review":
         return actions + _dispatch_review(state)
     if state["phase"] != "flash":
         return actions
     for lane in state["lanes"]:
         if lane["busy"]:
+            continue
+        if lane["pr_status"].startswith("objected:") and _finished(lane):
+            lane["busy"] = True
+            obj = lane["pr_status"][len("objected:"):]
+            lane["pr_status"] = "fixing"
+            actions.append({"kind": "pr_fix", "key": lane["repo"],
+                            "model": PHASE_MODEL["flash"], "detail": obj})
             continue
         fix = next((t for t in lane["tickets"] if t["status"] == "changes"), None)
         if fix is not None:
@@ -83,10 +103,30 @@ def _dispatch(state):
                         "model": PHASE_MODEL[state["phase"]], "detail": ""})
     if not any(lane["busy"] for lane in state["lanes"]) and not _has_ready(state) \
             and not _has_changes(state):
+        if any(_finished(lane) and lane["pr_status"] == "none" and lane["pr_tries"] == 1
+               for lane in state["lanes"]):
+            state["phase"] = "pr"
+            state["model"] = ""
+            actions.append(_load_action("pr"))
+            return actions
         state["phase"] = "review"
         state["model"] = ""
         actions.append(_load_action("review"))
     return actions
+
+
+def _pr_phase_end(state, actions):
+    """After a pr event: no busy lane means the pr round is over."""
+    if state["phase"] != "pr" or any(lane["busy"] for lane in state["lanes"]):
+        return actions
+    if any(_finished(lane) and lane["pr_status"] == "none" for lane in state["lanes"]):
+        return actions
+    if any(lane["pr_status"].startswith("objected:") for lane in state["lanes"]):
+        state["phase"] = "flash"
+        state["model"] = ""
+        return actions + [_load_action("flash")]
+    state["phase"] = "done"
+    return actions + [{"kind": "write_summary", "key": "", "model": "", "detail": ""}]
 
 
 def _reviewable(state):
@@ -186,6 +226,40 @@ def ref_step(state, event):
             return s, [_load_action(s["phase"])]
         s["model"] = event["detail"]
         s["load_tries"] = 0
+        return s, _dispatch(s)
+
+    if kind == "pr_reviewed":
+        lane = next((l for l in s["lanes"] if l["repo"] == event["key"]), None)
+        if lane is None or lane["pr_status"] != "running":
+            return s, []
+        lane["busy"] = False
+        if event.get("ok", True):
+            lane["pr_status"] = "approved"
+            actions = [{"kind": "open_pr", "key": lane["repo"], "model": "", "detail": ""}]
+        elif lane["pr_tries"] == 0:
+            lane["pr_tries"] = 1
+            lane["pr_status"] = "objected:" + event.get("detail", "")
+            actions = []
+        else:
+            lane["pr_status"] = "needs_you"
+            s["needs_you"].append({"key": lane["repo"], "reason": "pr_objected_twice",
+                                   "detail": event.get("detail", "")})
+            actions = [{"kind": "notify", "key": lane["repo"], "model": "",
+                        "detail": f"pr_objected_twice: {lane['repo']}"}]
+        return s, _pr_phase_end(s, actions)
+
+    if kind == "pr_fixed":
+        lane = next((l for l in s["lanes"] if l["repo"] == event["key"]), None)
+        if lane is None or lane["pr_status"] != "fixing":
+            return s, []
+        lane["busy"] = False
+        if not event.get("ok", True):
+            lane["pr_status"] = "needs_you"
+            s["needs_you"].append({"key": lane["repo"], "reason": "pr_objected_twice",
+                                   "detail": event.get("detail", "")})
+            return s, [{"kind": "notify", "key": lane["repo"], "model": "",
+                        "detail": f"pr_objected_twice: {lane['repo']}"}]
+        lane["pr_status"] = "none"
         return s, _dispatch(s)
 
     if kind == "reviewed":
