@@ -72,3 +72,15 @@ def test_AC4_env_overrides_file(tmp_path, monkeypatch):
 def test_AC5_options_tables(tmp_path):
     cfg = load_config(_write(tmp_path, '[options.omp]\nprovider = "p"\n'))
     assert cfg.options == {"omp": {"provider": "p"}}
+
+
+def test_AC1_default_path_order(monkeypatch, tmp_path):
+    from watcher.config import default_path
+    monkeypatch.setenv("WATCHER_CONFIG", str(tmp_path / "w.toml"))
+    assert default_path() == str(tmp_path / "w.toml")
+    monkeypatch.delenv("WATCHER_CONFIG")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert default_path() == str(tmp_path / "watcher" / "watcher.toml")
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    assert default_path() == str(tmp_path / "h" / ".config" / "watcher" / "watcher.toml")
