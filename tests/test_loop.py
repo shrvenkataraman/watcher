@@ -189,3 +189,41 @@ def test_run_returns_zero_when_done(world):
     _tick_until_done(world)
     assert run("demo", world["inbox"], world["root"],
                state_root=world["state_root"], sleep=lambda s: None) == 0
+
+
+def test_review_action_carries_the_ticket_commit(monkeypatch):
+    import watcher.loop as loopmod
+    from watcher.types import Action, Lane, State, TicketState
+    seen = []
+    monkeypatch.setattr(loopmod.executor, "execute", lambda a, c: seen.append(a) or None)
+    st = State(prd="p", phase="review", lanes=(Lane(repo="r", tickets=(
+        TicketState(key="r/01", batch=0, status="running", sha="abc123"),)),))
+    loopmod._act(Action("review", "r/01", model="m", detail="fixed"), st, None, None, "p", None, None)
+    assert seen[0].detail == "abc123"
+
+
+def test_second_run_for_same_prd_exits_3(tmp_path):
+    import watcher.loop as loopmod
+    from watcher import store
+    parent = os.path.dirname(store.state_dir("p", str(tmp_path)))
+    os.makedirs(parent, exist_ok=True)
+    held = open(os.path.join(parent, "p.run.lock"), "a")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert loopmod.run("p", "unused", "unused", state_root=str(tmp_path)) == 3
+    finally:
+        held.close()
+
+
+def test_open_pr_failure_notifies_instead_of_crashing(monkeypatch):
+    import watcher.loop as lp
+    from types import SimpleNamespace
+    from watcher.types import Action
+    seen = []
+    monkeypatch.setattr(lp.gh, "open_pr", lambda *a: (_ for _ in ()).throw(RuntimeError("refused")))
+    monkeypatch.setattr(lp.report, "notify", lambda k, d: seen.append(d))
+    monkeypatch.setattr(lp.store, "state_dir", lambda *a: "/tmp")
+    plan = SimpleNamespace(state=SimpleNamespace(prd="p"), specs={}, base="develop")
+    ctx = SimpleNamespace(root="/tmp")
+    assert lp._act(Action("open_pr", "r"), None, plan, ctx, "p", None, lambda: "") is None
+    assert seen and "refused" in seen[0]

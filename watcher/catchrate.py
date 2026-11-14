@@ -8,6 +8,7 @@ of seeds the reviewer rejects. `load_seeds` reads the patches from a directory.
 from __future__ import annotations
 
 import json
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -128,6 +129,10 @@ def register(subparsers) -> None:
     """Add the `catch-rate` subcommand to `subparsers`."""
 
     def run(args) -> int:
+        from watcher import executor  # noqa: PLC0415
+        if not hasattr(executor, "review"):  # fail before any worktree exists
+            print("catch-rate: no standalone reviewer in watcher.executor yet", file=sys.stderr)
+            return 2
         result = measure(
             args.worktree,
             args.base,

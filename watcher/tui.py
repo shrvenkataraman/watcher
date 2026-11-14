@@ -67,9 +67,9 @@ def loop(stdscr, prd: str, refresh: float = 2.0, run=subprocess.run) -> None:
             error = ""
         except Exception as exc:
             rows, error = [], f"status unavailable: {exc}"
-        for index, row in enumerate(rows):
-            stdscr.addstr(index, 0, row.text, _attr(row.style))
-        stdscr.addstr(total - 1, 0, error or note)
+        for index, row in enumerate(rows[:max(total - 1, 0)]):  # keep the last line free
+            stdscr.addstr(index, 0, row.text[:cols - 1], _attr(row.style))
+        stdscr.addstr(total - 1, 0, (error or note)[:cols - 1])
         key = stdscr.getkey()
         if key == "q":
             return
