@@ -141,3 +141,27 @@ def test_cli_tui_subcommand(monkeypatch):
     monkeypatch.setattr(tui, "main", lambda prd: seen.append(prd) or 0)
     assert cli.main(["watcher", "tui", "--prd", "demo"]) == 0
     assert seen == ["demo"]
+
+
+def test_key_timeout_redraws_instead_of_crashing(monkeypatch):
+    import curses
+
+    class TimeoutScreen(FakeScreen):
+        def getkey(self):
+            key = self.keys.pop(0) if self.keys else "q"
+            if key is None:  # curses raises when no key arrives before the timeout
+                raise curses.error("no input")
+            return key
+
+    _prep(monkeypatch)
+    run = FakeRun(stdout=json.dumps(_doc()))
+    screen = TimeoutScreen([None, None, "q"])
+    tui.loop(screen, "demo", refresh=2.0, run=run)
+    assert len(run.calls) >= 3  # fetched once per redraw
+
+
+def test_zero_refresh_still_waits_for_keys(monkeypatch):
+    _prep(monkeypatch)
+    screen = FakeScreen(["q"])
+    tui.loop(screen, "demo", refresh=0, run=FakeRun(stdout=json.dumps(_doc())))
+    assert screen.timeouts[0] >= 100

@@ -56,10 +56,10 @@ def _clamp(index: int, count: int) -> int:
 
 def loop(stdscr, prd: str, refresh: float = 2.0, run=subprocess.run) -> None:
     """Draw the status every `refresh` seconds; `j`/`k` select, `q` exits, other keys run watcher."""
-    stdscr.timeout(int(refresh * 1000))
-    total, cols = stdscr.getmaxyx()
+    stdscr.timeout(max(int(refresh * 1000), 100))  # never 0: no busy loop
     selected, rows, note, error = 0, [], "", ""
     while True:
+        total, cols = stdscr.getmaxyx()  # read each redraw so a resize cannot overflow
         try:
             doc = fetch_doc(prd, run=run)
             rows = build_rows({**doc, "lanes": [_lane(lane) for lane in doc["lanes"]]},
@@ -70,7 +70,10 @@ def loop(stdscr, prd: str, refresh: float = 2.0, run=subprocess.run) -> None:
         for index, row in enumerate(rows[:max(total - 1, 0)]):  # keep the last line free
             stdscr.addstr(index, 0, row.text[:cols - 1], _attr(row.style))
         stdscr.addstr(total - 1, 0, (error or note)[:cols - 1])
-        key = stdscr.getkey()
+        try:
+            key = stdscr.getkey()
+        except curses.error:  # no key before the refresh timeout: redraw
+            continue
         if key == "q":
             return
         if key in _DOWN:
