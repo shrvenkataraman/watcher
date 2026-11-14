@@ -53,6 +53,8 @@ pub struct Ticket {
     pub status: String,
     #[serde(default)]
     pub sha: String,
+    #[serde(default)]
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,7 +141,7 @@ pub fn merge(boards: Vec<Board>) -> (Board, Vec<String>) {
         }
         for lane in board_lanes {
             lanes.push(Lane {
-                repo: format!("{}/{}", prd, lane.repo),
+                repo: format!("{}/{}", lane.repo, prd),
                 pr_status: lane.pr_status,
                 columns: lane.columns,
             });
