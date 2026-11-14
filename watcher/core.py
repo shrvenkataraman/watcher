@@ -344,65 +344,6 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     return state, tuple(actions)
 
 
-def _dispatch_pr(
-    state: State, actions: tuple[Action, ...]
-) -> tuple[State, tuple[Action, ...]]:
-    """Give one PR review to every idle, finished lane whose pr_status is still none."""
-    lanes: list[Lane] = []
-    pr_actions = list(actions)
-
-    for lane in state.lanes:
-        if lane.busy or lane.pr_status != "none" or not finished(lane):
-            lanes.append(lane)
-            continue
-        pr_actions.append(Action("pr_review", key=lane.repo, model=model_for(state, "pr")))
-        lanes.append(replace(lane, busy=True, pr_status="running"))
-
-    state = replace(state, lanes=tuple(lanes))
-    if len(pr_actions) > len(actions) or any(lane.busy for lane in state.lanes):
-        return state, tuple(pr_actions)
-    # Nothing to review: released tickets send the run back, else close the round.
-    if _open_ticket_work(state):
-        return _back_to_work(state, tuple(pr_actions))
-    objected = any(lane.pr_status.startswith(OBJECTION_PREFIX) for lane in state.lanes)
-    parked = any(t.status == "needs_you" for lane in state.lanes for t in lane.tickets)
-    if objected or not parked:
-        return _pr_phase_end(state, tuple(pr_actions))
-    return state, tuple(pr_actions)  # only parked work left: wait for the user
-
-
-def _open_ticket_work(state: State) -> bool:
-    """Work the run can do now: ready pending tickets, or changes/implemented/fixed ones."""
-    return any(
-        ready_tickets(state, lane)
-        or any(t.status in ("changes", "implemented", "fixed") for t in lane.tickets)
-        for lane in state.lanes)
-
-
-def _back_to_work(state: State, actions: tuple[Action, ...]) -> tuple[State, tuple[Action, ...]]:
-    """A ticket released in the pr phase goes back through review or flash."""
-    if any(t.status in ("implemented", "fixed") for lane in state.lanes for t in lane.tickets):
-        return replace(state, phase="review", model=""), actions + (
-            Action("load_model", model=model_for(state, "review")),)
-    return replace(state, phase="flash", model=""), actions + (
-        Action("load_model", model=model_for(state, "flash")),)
-
-
-def _pr_phase_end(
-    state: State, actions: tuple[Action, ...]
-) -> tuple[State, tuple[Action, ...]]:
-    """Close the pr round once no lane is busy: objections go to flash, else done."""
-    if state.phase != "pr" or any(lane.busy for lane in state.lanes):
-        return state, actions
-    if any(finished(lane) and lane.pr_status == "none" for lane in state.lanes):
-        return state, actions
-    if any(lane.pr_status.startswith(OBJECTION_PREFIX) for lane in state.lanes):
-        return replace(state, phase="flash", model=""), actions + (
-            Action("load_model", model=model_for(state, "flash")),
-        )
-    return replace(state, phase="done"), actions + (Action("write_summary"),)
-
-
 def _dispatch_review(state: State) -> tuple[State, tuple[Action, ...]]:
     """Give one reviewable ticket to every idle lane, then leave the phase if done."""
     actions: list[Action] = []
@@ -563,4 +504,5 @@ def _mark_implemented(state: State, event: Event) -> State:
         )
     return replace(state, lanes=tuple(lanes))
 
+from .core_pr import _dispatch_pr, _open_ticket_work, _back_to_work, _pr_phase_end  # noqa: E402  (re-export after core's own definitions)
 from .core_pr import _pr_reviewed, _pr_fixed, _parked_repo, _notify_repo  # noqa: E402  (re-export after core's own definitions)
