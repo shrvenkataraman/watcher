@@ -122,6 +122,20 @@ Every command except `new` accepts `--prd`, `--state-root` and `--config`.
 
 A KEY looks like `quark-kit/07`. Commands that read state never write `state.json`. User input is appended to `queue.jsonl`.
 
+## Several projects at once
+
+Each project is one `--prd` with its own `watcher run`. Runs share the GPU
+through a model lease: runs that need the same model go together, and a run
+that needs another model waits until the first model is free. Lock files live
+in `<state root>/watcher-leases`.
+
+Show every project on one board:
+
+    watcher board --all
+
+`r` retries and `s` skips the ticket under the cursor, in its own project.
+`watcher prds` prints the projects that have state, as JSON.
+
 ## Plug-ins
 
 watcher has four plug-in roles. See `docs/plugins.md`.
