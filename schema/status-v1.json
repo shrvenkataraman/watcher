@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://watcher.local/schemas/status-v1.json",
+  "title": "Watcher status document v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "prd", "phase", "batch", "model", "needs_you", "lanes"],
+  "properties": {
+    "schema": {"type": "integer", "enum": [1]},
+    "prd": {"type": "string"},
+    "phase": {"type": "string"},
+    "batch": {"type": "integer", "minimum": 0},
+    "model": {"type": "string"},
+    "needs_you": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "reason", "detail"],
+        "properties": {
+          "key": {"type": "string"},
+          "reason": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repo", "busy", "pr_status", "counts", "running"],
+        "properties": {
+          "repo": {"type": "string"},
+          "busy": {"type": "boolean"},
+          "pr_status": {"type": "string"},
+          "running": {"type": ["string", "null"]},
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "propertyNames": {"enum": ["pending", "running", "implemented", "approved", "changes", "fixed", "needs_you", "skipped"]},
+            "required": ["pending", "running", "implemented", "approved", "changes", "fixed", "needs_you", "skipped"],
+            "properties": {
+              "pending": {"type": "integer", "minimum": 0},
+              "running": {"type": "integer", "minimum": 0},
+              "implemented": {"type": "integer", "minimum": 0},
+              "approved": {"type": "integer", "minimum": 0},
+              "changes": {"type": "integer", "minimum": 0},
+              "fixed": {"type": "integer", "minimum": 0},
+              "needs_you": {"type": "integer", "minimum": 0},
+              "skipped": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}
