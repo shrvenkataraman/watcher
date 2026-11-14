@@ -1,0 +1,39 @@
+#!/bin/bash
+# Fake hk: records argv+cwd, creates contract on `new`, copies fixture receipt on `verify`.
+set -u
+log="${HK_LOG:-/dev/null}"
+echo "$PWD $*" >> "$log"
+case "$1" in
+  new)
+    if [ -n "${NEW_FAIL:-}" ]; then
+      echo "hk: repo not registered: $2 $*" >&2
+      exit 3
+    fi
+    task=""; repo=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --task) task=$2; shift 2;;
+        --repo) repo=$2; shift 2;;
+        *) shift;;
+      esac
+    done
+    wt="features/$task/$repo"
+    mkdir -p "$wt/.agent"
+    printf '{"task_id":"%s/%s"}\n' "$task" "$repo" > "$wt/.agent/contract.json"
+    ;;
+  verify)
+    if [ -n "${FAKE_STDERR:-}" ]; then echo "$FAKE_STDERR" >&2; fi
+    if [ -n "${FAKE_RECEIPT:-}" ] && [ -f "${FAKE_RECEIPT}" ]; then
+      mkdir -p .agent
+      cp "$FAKE_RECEIPT" .agent/receipt.json
+      v=$(jq -r '.verdict' .agent/receipt.json)
+      [ "$v" = "green" ] && exit 0
+      exit 1
+    fi
+    exit 1
+    ;;
+  *)
+    echo "hk: unknown verb $1" >&2
+    exit 2
+    ;;
+esac
