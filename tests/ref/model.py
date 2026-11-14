@@ -23,6 +23,10 @@ def _has_ready(state):
     return any(ready_tickets(state, lane) for lane in state["lanes"])
 
 
+def _has_changes(state):
+    return any(t["status"] == "changes" for lane in state["lanes"] for t in lane["tickets"])
+
+
 def _dispatch(state):
     actions = []
     if state["phase"] == "review":
@@ -32,6 +36,13 @@ def _dispatch(state):
     for lane in state["lanes"]:
         if lane["busy"]:
             continue
+        fix = next((t for t in lane["tickets"] if t["status"] == "changes"), None)
+        if fix is not None:
+            fix["status"] = "running"
+            lane["busy"] = True
+            actions.append({"kind": "fix", "key": fix["key"],
+                            "model": PHASE_MODEL["flash"], "detail": fix["findings"]})
+            continue
         ready = ready_tickets(state, lane)
         if not ready:
             continue
@@ -40,7 +51,8 @@ def _dispatch(state):
         lane["busy"] = True
         actions.append({"kind": "implement", "key": ticket["key"],
                         "model": PHASE_MODEL[state["phase"]], "detail": ""})
-    if not any(lane["busy"] for lane in state["lanes"]) and not _has_ready(state):
+    if not any(lane["busy"] for lane in state["lanes"]) and not _has_ready(state) \
+            and not _has_changes(state):
         state["phase"] = "review"
         state["model"] = ""
         actions.append(_load_action("review"))
@@ -129,6 +141,21 @@ def ref_step(state, event):
         else:
             ticket["status"] = "changes"
             ticket["findings"] = event.get("detail", "")
+        return s, _dispatch(s)
+
+    if kind == "fixed" and event.get("ok", True):
+        target = None
+        for lane in s["lanes"]:
+            for ticket in lane["tickets"]:
+                if ticket["key"] == event["key"] and ticket["status"] == "running":
+                    target = (lane, ticket)
+        if target is None:
+            return s, []
+        lane, ticket = target
+        ticket["status"] = "fixed"
+        ticket["sha"] = event.get("sha", "")
+        ticket["fix_rounds"] += 1
+        lane["busy"] = False
         return s, _dispatch(s)
 
     if kind == "implemented" and event.get("ok", True):
