@@ -29,12 +29,28 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["repo", "busy", "pr_status", "counts", "running"],
+        "required": ["repo", "busy", "pr_status", "counts", "running", "tickets"],
         "properties": {
           "repo": {"type": "string"},
           "busy": {"type": "boolean"},
           "pr_status": {"type": "string"},
           "running": {"type": ["string", "null"]},
+          "tickets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["key", "status", "sha", "depends_on", "verify_fails", "fix_rounds"],
+              "properties": {
+                "key": {"type": "string"},
+                "status": {"type": "string"},
+                "sha": {"type": ["string", "null"]},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+                "verify_fails": {"type": "integer", "minimum": 0},
+                "fix_rounds": {"type": "integer", "minimum": 0}
+              }
+            }
+          },
           "counts": {
             "type": "object",
             "additionalProperties": false,
