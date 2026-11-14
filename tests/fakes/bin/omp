@@ -1,0 +1,28 @@
+#!/bin/bash
+# Fake omp: behaviour chosen by FAKE_OMP_MODE. Records argv to $OMP_LOG.
+set -u
+echo "$PWD $*" >> "${OMP_LOG:-/dev/null}"
+case "${FAKE_OMP_MODE:-ok}" in
+  question)
+    mkdir -p .agent
+    printf 'Which base branch should I use?\n' > .agent/question.md
+    echo '{"type":"result"}'
+    exit 0
+    ;;
+  sleep)
+    sleep "${FAKE_OMP_SLEEP:-30}"
+    ;;
+  stoperror)
+    echo '{"type":"assistant"}'
+    echo '{"type":"result","stopReason":"error","error":"model overload"}'
+    exit 0
+    ;;
+  fail)
+    echo "omp crashed" >&2
+    exit 7
+    ;;
+  ok)
+    echo '{"type":"result","stopReason":"end_turn"}'
+    exit 0
+    ;;
+esac
