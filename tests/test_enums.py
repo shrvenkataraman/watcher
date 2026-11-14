@@ -71,3 +71,11 @@ def test_AC4_aproved_names_value_and_key():
 def test_AC3_AC4_valid_values_round_trip(phase, status):
     s = _state(phase, status)
     assert state_from_json(to_json(s)) == s
+
+
+def test_AC5_core_treats_enum_phase_as_its_string():
+    from watcher import core
+    from watcher.types import Event, Phase, State
+    plain = core.step(State(prd="p", phase="flash"), Event("start"))
+    enum = core.step(State(prd="p", phase=Phase.FLASH), Event("start"))
+    assert plain == enum
