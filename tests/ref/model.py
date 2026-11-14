@@ -37,23 +37,65 @@ def _has_changes(state):
     return any(t["status"] == "changes" for lane in state["lanes"] for t in lane["tickets"])
 
 
+def _blocked_keys(state):
+    """Keys that can never be approved: skipped tickets, and ones parked dependency_blocked."""
+    keys = {t["key"] for ln in state["lanes"] for t in ln["tickets"] if t["status"] == "skipped"}
+    keys |= {n["key"] for n in state["needs_you"] if n["reason"] == "dependency_blocked"}
+    return keys
+
+
 def _block_check(state):
-    """Park pending tickets whose dependency is needs_you or skipped. Return notify actions."""
+    """Park pending tickets whose dependency can never be approved, transitively."""
     actions = []
-    for lane in state["lanes"]:
-        for t in lane["tickets"]:
-            if t["status"] != "pending":
-                continue
-            dep = next((d for d in t["depends_on"]
-                        if _status(state, d) in ("needs_you", "skipped")), None)
-            if dep is None:
-                continue
-            t["status"] = "needs_you"
-            lane["busy"] = False
-            state["needs_you"].append({"key": t["key"], "reason": "dependency_blocked",
-                                       "detail": dep})
-            actions.append({"kind": "notify", "key": t["key"], "model": "",
-                            "detail": f"dependency_blocked: {t['key']}"})
+    blocked = _blocked_keys(state)
+    changed = True
+    while changed:
+        changed = False
+        for lane in state["lanes"]:
+            for t in lane["tickets"]:
+                if t["status"] != "pending":
+                    continue
+                dep = next((d for d in t["depends_on"] if d in blocked), None)
+                if dep is None:
+                    continue
+                t["status"] = "needs_you"
+                lane["busy"] = False
+                state["needs_you"].append({"key": t["key"], "reason": "dependency_blocked",
+                                           "detail": dep})
+                actions.append({"kind": "notify", "key": t["key"], "model": "",
+                                "detail": f"dependency_blocked: {t['key']}"})
+                blocked.add(t["key"])
+                changed = True
+    return actions
+
+
+def _waiting_on_human(state):
+    tickets = {t["key"]: t for ln in state["lanes"] for t in ln["tickets"]}
+    dependents = {}
+    for key, t in tickets.items():
+        for d in t["depends_on"] if t["status"] == "pending" else ():
+            dependents.setdefault(d, []).append(key)
+    queue = [k for k, t in tickets.items() if t["status"] == "needs_you"]
+    waiting = set()
+    while queue:
+        for nxt in dependents.get(queue.pop(), ()):
+            if nxt not in waiting:
+                waiting.add(nxt)
+                queue.append(nxt)
+    return waiting
+
+
+def _idle_for_human(state):
+    waiting = _waiting_on_human(state)
+    return any(t["key"] in waiting and t["batch"] <= state["batch"]
+               for ln in state["lanes"] for t in ln["tickets"])
+
+
+def _gate_done(s, actions):
+    """Undo a done phase while a pending ticket waits on a needs_you dependency."""
+    if s["phase"] == "done" and _waiting_on_human(s):
+        s["phase"] = "pr"
+        return [a for a in actions if a["kind"] != "write_summary"]
     return actions
 
 
@@ -87,7 +129,7 @@ def _dispatch(state):
         objected = any(lane["pr_status"].startswith("objected:") for lane in state["lanes"])
         parked = any(t["status"] == "needs_you" for lane in state["lanes"] for t in lane["tickets"])
         if objected or not parked:
-            return _pr_phase_end(state, actions)
+            return _gate_done(state, _pr_phase_end(state, actions))
         return actions
     if state["phase"] == "review":
         return actions + _dispatch_review(state)
@@ -120,6 +162,8 @@ def _dispatch(state):
                         "model": PHASE_MODEL[state["phase"]], "detail": ""})
     if not any(lane["busy"] for lane in state["lanes"]) and not _has_ready(state) \
             and not _has_changes(state):
+        if _idle_for_human(state):
+            return actions
         if any(_finished(lane) and lane["pr_status"] == "none" and lane["pr_tries"] == 1
                for lane in state["lanes"]):
             state["phase"] = "pr"
@@ -183,6 +227,10 @@ def _next_phase(state, actions):
             state["batch"] += 1
         state["model"] = ""
         actions.append(_load_action("flash"))
+    elif _waiting_on_human(state):
+        # A pending ticket waits on a needs_you dependency: pr would end the run
+        # while it can never run, so stay in review.
+        return actions
     else:
         state["phase"] = "pr"
         state["model"] = ""
@@ -266,7 +314,7 @@ def ref_step(state, event):
                                    "detail": event.get("detail", "")})
             actions = [{"kind": "notify", "key": lane["repo"], "model": "",
                         "detail": f"pr_objected_twice: {lane['repo']}"}]
-        return s, _pr_phase_end(s, actions)
+        return s, _gate_done(s, _pr_phase_end(s, actions))
 
     if kind == "pr_fixed":
         lane = next((l for l in s["lanes"] if l["repo"] == event["key"]), None)

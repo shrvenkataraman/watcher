@@ -35,6 +35,29 @@ def ready_tickets(state: State, lane: Lane) -> list[TicketState]:
     ]
 
 
+def waiting_on_human(state: State) -> set[str]:
+    """Keys of pending tickets that wait on a needs_you dependency, directly or via pending ones."""
+    by_key = {t.key: t for lane in state.lanes for t in lane.tickets}
+    dependents: dict[str, list[str]] = {}
+    for key, t in by_key.items():
+        for dep in t.depends_on if t.status == "pending" else ():
+            dependents.setdefault(dep, []).append(key)
+    queue = [k for k, t in by_key.items() if t.status == "needs_you"]
+    waiting: set[str] = set()
+    while queue:
+        for nxt in dependents.get(queue.pop(), ()):
+            if nxt not in waiting:
+                waiting.add(nxt)
+                queue.append(nxt)
+    return waiting
+
+
+def _idle_for_human(state: State) -> bool:
+    waiting = waiting_on_human(state)
+    return any(t.key in waiting and t.batch <= state.batch
+               for lane in state.lanes for t in lane.tickets)
+
+
 def reviewable_tickets(lane: Lane) -> list[TicketState]:
     """Tickets this lane may send to review now: status implemented or fixed."""
     return [t for t in lane.tickets if t.status in REVIEWABLE_STATUSES]
@@ -84,7 +107,7 @@ def step(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
         return _dispatch(marked)
 
     if event.kind == "pr_reviewed":
-        return _pr_reviewed(state, event)
+        return _hold_done(*_pr_reviewed(state, event))
     if event.kind == "pr_fixed":
         return _pr_fixed(state, event)
 
@@ -228,40 +251,66 @@ def _skip(state: State, event: Event) -> tuple[State, tuple[Action, ...]]:
     return _dispatch(_drop_needs(state, event.key))
 
 
+def _blocked_keys(state: State) -> set[str]:
+    """Keys that can never be approved: skipped tickets, and ones parked dependency_blocked."""
+    keys = {t.key for lane in state.lanes for t in lane.tickets if t.status == "skipped"}
+    keys |= {n.key for n in state.needs_you if n.reason == "dependency_blocked"}
+    return keys
+
+
 def _block_check(
     state: State,
 ) -> tuple[State, tuple[Action, ...]]:
-    """Park every pending ticket whose dependency is parked or skipped.
+    """Park every pending ticket whose dependency can never be approved.
 
-    Parked first, so a dependency parked here blocks its own dependents in the
-    same pass. The dependency key goes into the needs_you detail, so `retry`
-    names the dependency the human has to answer.
+    A needs_you dependency only waits for a human, so its dependents stay pending.
+    A skipped one, and one parked `dependency_blocked`, can never be approved, so
+    its dependents park too. The scan repeats until no new ticket parks, so a
+    skipped chain parks every ticket behind it in the same step.
+    The dependency key goes into the needs_you detail, so `retry` names it.
     """
     actions: list[Action] = []
-    for i, _ in enumerate(state.lanes):
-        for ticket in state.lanes[i].tickets:
-            if ticket.status != "pending":
-                continue
-            dep = next(
-                (d for d in ticket.depends_on
-                 if status(state, d) in ("needs_you", "skipped")),
-                None,
-            )
-            if dep is None:
-                continue
-            state = _place(state, i, replace(ticket, status="needs_you"))
-            state = replace(state, needs_you=state.needs_you + (
-                NeedsYou(ticket.key, "dependency_blocked", dep),))
-            actions.append(
-                Action("notify", key=ticket.key, detail=f"dependency_blocked: {ticket.key}"))
+    blocked = _blocked_keys(state)
+    changed = True
+    while changed:
+        changed = False
+        for i, _ in enumerate(state.lanes):
+            for ticket in state.lanes[i].tickets:
+                if ticket.status != "pending":
+                    continue
+                dep = next((d for d in ticket.depends_on if d in blocked), None)
+                if dep is None:
+                    continue
+                state = _place(state, i, replace(ticket, status="needs_you"))
+                state = replace(state, needs_you=state.needs_you + (
+                    NeedsYou(ticket.key, "dependency_blocked", dep),))
+                actions.append(
+                    Action("notify", key=ticket.key,
+                           detail=f"dependency_blocked: {ticket.key}"))
+                blocked.add(ticket.key)
+                changed = True
     return state, tuple(actions)
+
+
+def _hold_done(
+    state: State, actions: tuple[Action, ...]
+) -> tuple[State, tuple[Action, ...]]:
+    """Undo a done phase while a pending ticket waits on a needs_you dependency.
+
+    Done ends the run, so that ticket would vanish from NEEDS YOU with no way to
+    run. The phase stays pr and write_summary is dropped.
+    """
+    if state.phase == "done" and waiting_on_human(state):
+        return replace(state, phase="pr"), tuple(
+            a for a in actions if a.kind != "write_summary")
+    return state, actions
 
 
 def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     """Release blocked tickets, give one ticket to every idle lane, then end the phase."""
     state, block_actions = _block_check(state)
     if state.phase == "pr":
-        return _dispatch_pr(state, block_actions)
+        return _hold_done(*_dispatch_pr(state, block_actions))
     if state.phase == "review":
         review_state, review_actions = _dispatch_review(state)
         return review_state, block_actions + review_actions
@@ -328,6 +377,8 @@ def _dispatch(state: State) -> tuple[State, tuple[Action, ...]]:
     busy = any(lane.busy for lane in state.lanes)
     work = any(
         ready_tickets(state, lane) or fixable_tickets(lane) for lane in state.lanes)
+    if not busy and not work and _idle_for_human(state):
+        return state, tuple(actions)
     if not busy and not work:
         # A lane that already spent its one PR retry goes back for a second review,
         # instead of a review phase over tickets that are all approved.
