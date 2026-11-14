@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "prd": "prd-demo",
+  "phase": "review",
+  "batch": 2,
+  "model": "qwen3.8-27b-w8a8",
+  "needs_you": [
+    {
+      "key": "T7",
+      "reason": "blocked",
+      "detail": "needs a human"
+    }
+  ],
+  "lanes": [
+    {
+      "repo": "alpha",
+      "busy": false,
+      "pr_status": "none",
+      "counts": {
+        "pending": 1,
+        "running": 1,
+        "implemented": 1,
+        "approved": 1,
+        "changes": 0,
+        "fixed": 0,
+        "needs_you": 0,
+        "skipped": 0
+      },
+      "running": "T2",
+      "tickets": [
+        {
+          "key": "T1",
+          "status": "pending",
+          "sha": "",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        },
+        {
+          "key": "T2",
+          "status": "running",
+          "sha": "",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        },
+        {
+          "key": "T3",
+          "status": "implemented",
+          "sha": "a1b2c3d",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        },
+        {
+          "key": "T4",
+          "status": "approved",
+          "sha": "e4f5a6b",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        }
+      ]
+    },
+    {
+      "repo": "beta",
+      "busy": false,
+      "pr_status": "open",
+      "counts": {
+        "pending": 0,
+        "running": 0,
+        "implemented": 0,
+        "approved": 0,
+        "changes": 1,
+        "fixed": 1,
+        "needs_you": 1,
+        "skipped": 1
+      },
+      "running": null,
+      "tickets": [
+        {
+          "key": "T5",
+          "status": "changes",
+          "sha": "0123abc",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        },
+        {
+          "key": "T6",
+          "status": "fixed",
+          "sha": "c7d8e9f",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        },
+        {
+          "key": "T7",
+          "status": "needs_you",
+          "sha": "",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        },
+        {
+          "key": "T8",
+          "status": "skipped",
+          "sha": "",
+          "depends_on": [],
+          "verify_fails": 0,
+          "fix_rounds": 0
+        }
+      ]
+    }
+  ]
+}
