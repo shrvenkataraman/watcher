@@ -17,6 +17,10 @@ fi
 
 uv run pytest -q --cov=watcher --cov-report=xml:/tmp/watcher-cov.xml
 uv run diff-cover /tmp/watcher-cov.xml --compare-branch="$base" --fail-under="$COVERAGE_MIN"
+if [ "${GATE_MUTATION:-on}" = "off" ]; then
+  echo "GATE-EXTRA: pass (coverage only; mutation runs in CI)"
+  exit 0
+fi
 uv run mutmut run --max-children 4 >/dev/null || true
 score=$(uv run mutmut results --all true | python3 -c '
 import sys
@@ -29,7 +33,9 @@ for line in sys.stdin:
         total += 1
     elif ": survived" in line or ": timeout" in line or ": suspicious" in line:
         total += 1
-print(100 if total == 0 else int(killed / total * 100))
+if total == 0:
+    sys.exit(3)  # no mutants ran: a silent pass would hide a broken mutmut run
+print(int(killed / total * 100))
 ')
 [ "$score" -ge "$MUTATION_MIN" ] || { echo "mutation score $score < $MUTATION_MIN"; exit 1; }
 echo "GATE-EXTRA: pass (mutation $score)"
