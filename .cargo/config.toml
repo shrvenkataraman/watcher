@@ -1,0 +1,6 @@
+# Build output goes to RAM (/tmp is tmpfs), shared by every worktree of this repo.
+# Why: debug links of the GPUI board rewrote GBs per build and wore the SSD at about 2 TB/day.
+# Cost: the cache is lost on reboot, so the first build after boot is cold.
+# A CARGO_TARGET_DIR in the environment still overrides this.
+[build]
+target-dir = "/tmp/rust-target/watcher"
